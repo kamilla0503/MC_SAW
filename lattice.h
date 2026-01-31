@@ -4,9 +4,9 @@
 #include <valarray>
 #include <vector>
 
-#ifdef GPU
+//#ifdef GPU
 #include<Kokkos_Core.hpp>
-#endif
+//#endif
 
 class Lattice {
     public:
@@ -15,30 +15,32 @@ class Lattice {
     int lattice_size() {return lattice_side;};
     int NumberOfNodes () {return number_of_nodes;};
 
-    // #ifdef GPU
-    // KOKKOS_INLINE_FUNCTION 
-    // #endif
     virtual int ndim2() = 0;
+
+    virtual void create_lattice() = 0 ;
      
-    private:
+public:
     int lattice_side;
     int number_of_nodes;
-
+    std::valarray<int> map_of_contacts_int;
+    std::valarray<int> inverse_steps;
 };
 
 class Lattice_2D : public Lattice {
-    // #ifdef GPU
-    // KOKKOS_INLINE_FUNCTION 
-    // #endif
+
+    Lattice_2D(int max_seq_size = 0);
     int ndim2()  {return 4;};
 
+    void create_lattice();
 };
 
 class Lattice_3D : public Lattice {
-    // #ifdef GPU
-    // KOKKOS_INLINE_FUNCTION 
-    // #endif
+
+    Lattice_3D(int max_seq_size = 0);
+
     int ndim2()  {return 6;};
+
+    void create_lattice();
 };
 
 #endif
