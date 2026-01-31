@@ -11,17 +11,24 @@
 class Lattice {
     public:
 
-    Lattice(int max_seq_size = 10) { lattice_side = max_seq_size; };
+    Lattice(int max_seq_size = 10) { 
+        lattice_side = max_seq_size;
+        lattice_side_host = Kokkos::View<int, Kokkos::HostSpace>("lattice_side");
+        lattice_side_host() = lattice_side;
+    };
     int lattice_size() {return lattice_side;};
     int NumberOfNodes () {return number_of_nodes;};
 
     virtual int ndim2() = 0;
 
     virtual void create_lattice() = 0 ;
+
+    virtual float radius(const int& start, const int& end) = 0;
      
 public:
     int lattice_side;
     int number_of_nodes;
+    Kokkos::View<int, Kokkos::HostSpace> lattice_side_host;
     Kokkos::View<int*, Kokkos::HostSpace> map_of_contacts_int;
     Kokkos::View<int*, Kokkos::HostSpace> inverse_steps;
 };
@@ -32,6 +39,7 @@ class Lattice_2D : public Lattice {
     int ndim2()  {return 4;};
 
     void create_lattice();
+    float radius(const int& start, const int& end);
 };
 
 class Lattice_3D : public Lattice {
@@ -41,6 +49,7 @@ class Lattice_3D : public Lattice {
     int ndim2()  {return 6;};
 
     void create_lattice();
+    float radius(const int& start, const int& end);
 };
 
 #endif

@@ -4,16 +4,37 @@
 #include"common.h"
 #include"lattice.h"
 
+#ifndef N_CHAINS
+#define N_CHAINS 16
+#endif
+
 // struct HostData {
 //     Kokkos::View<int*, Kokkos::HostSpace> map_of_contacts_int;
 //     Kokkos::View<int*, Kokkos::HostSpace> inverse_steps;
 
 //   };
 
-template<class ExecSpace>
+template<class ExecSpace, class T>
 struct DeviceData {
+  //LATTICE: 
     Kokkos::View<int*, ExecSpace> map_of_contacts_int;
     Kokkos::View<int*, ExecSpace> inverse_steps;
+
+
+  //MODEL SCALARS:
+    Kokkos::View<int, ExecSpace> L;
+    Kokkos::View<int, ExecSpace> lattice_side_device;
+    
+
+  //MODEl ARRAYS 
+  Kokkos::View<T **, ExecSpace> sequence_on_lattice;
+  Kokkos::View<int **, ExecSpace> next_monomers;
+  Kokkos::View<int **, ExecSpace> previous_monomers;
+  Kokkos::View<int **, ExecSpace> directions;
+  Kokkos::View<int **, ExecSpace> lattice_nodes_positions;
+
+  Kokkos::View<int*, ExecSpace> start_conformation;
+  Kokkos::View<int*, ExecSpace> end_conformation;
 };
 
 
@@ -22,48 +43,57 @@ public:
 
     Model(int L);
 
-    void HostDataInit();
-    void DeviceDataInit ();
-
+    virtual void HostDataInit() = 0;
+    virtual void DeviceDataInit () = 0;
 
 public:
     int L;
+    Kokkos::View<int, Kokkos::HostSpace> L_host;
 
     Lattice *lattice = nullptr;
 
-    //HostData hostdata;
-    DeviceData<Kokkos::CudaSpace> devicedata;
-    DeviceData<Kokkos::HostSpace> hostdata;
 };
 
-
+template<class T>
 class SAW_model : public Model {
 public:
+    SAW_model<T>(int L);
 
-    SAW_model(int L) : Model(L) {};
+    // SAW_model(int L) : Model(L) {};
 
+    void geometry_initialization_arrays();
+
+    void geometry_initialization_stick();
+
+
+    void HostDataInit();
+    void DeviceDataInit ();
+
+    //HostData hostdata;
+    DeviceData<Kokkos::CudaSpace, T> devicedata;
+    DeviceData<Kokkos::HostSpace, T> hostdata;
 };
 
 
-class XY_LI : public SAW_model {
+class XY_LI : public SAW_model<float> {
 public:
-    XY_LI (int L) : SAW_model(L) {};
+    XY_LI (int L) : SAW_model<float>(L) {};
 };
 
 
-class XY_SI : public SAW_model {
+class XY_SI : public SAW_model<float> {
 public:
 
 };
 
 
-class Ising_SI : public Model {
+class Ising_SI : public SAW_model<int> {
 public:
 
 };
 
 
-class Ising_LI : public Model {
+class Ising_LI : public SAW_model<int> {
 public:
 
 };
@@ -71,21 +101,39 @@ public:
 // Single source of truth list (add fields once, reuse everywhere)
 #define DATA_FIELDS(X) \
   X(map_of_contacts_int) \
-  X(inverse_steps)
+  X(inverse_steps) \
+  X(L) \
+  X(lattice_side_device)
   
   
-template<class ExecSpace>
-void upload_all(const DeviceData<Kokkos::HostSpace>& h, DeviceData<ExecSpace>& d) {
+template<class ExecSpace, class T>
+void upload_all(const DeviceData<Kokkos::HostSpace, T>& h, DeviceData<ExecSpace, T>& d) {
 #define X(name) realloc_like_and_copy(d.name, h.name, #name);
   DATA_FIELDS(X)
 #undef X
 }
 
-template<class ExecSpace>
-void download_all(const DeviceData<ExecSpace>& d, DeviceData<Kokkos::HostSpace>& h) {
+template<class ExecSpace, class T>
+void download_all(const DeviceData<ExecSpace, T>& d, DeviceData<Kokkos::HostSpace, T>& h) {
 #define X(name) realloc_like_and_copy(h.name, d.name, #name);
   DATA_FIELDS(X)
 #undef X
+}
+
+
+template<class T>
+void SAW_model<T>::HostDataInit() {
+    hostdata.map_of_contacts_int = lattice->map_of_contacts_int;
+    hostdata.inverse_steps       = lattice->inverse_steps;
+
+    hostdata.L = L_host;
+    hostdata.lattice_side_device = lattice->lattice_side_host;
+
+}
+
+template<class T>
+void SAW_model<T>::DeviceDataInit() {
+    upload_all<Kokkos::CudaSpace, T>(hostdata, devicedata);
 }
 
 #endif

@@ -5,7 +5,7 @@
 #include <string>
 #include <type_traits>
 
-#include"Model.h"
+ 
 
 template<class DstView, class SrcView>
 void realloc_like_and_copy(DstView& dst, const SrcView& src, const std::string& label) {
@@ -14,7 +14,11 @@ void realloc_like_and_copy(DstView& dst, const SrcView& src, const std::string& 
                 "value_type mismatch");
 
   // Allocate/resize dst to match src
-  if constexpr (DstView::rank == 1) {
+  if constexpr (DstView::rank == 0) {
+    // scalar View: constructor takes only label
+    if (!dst.is_allocated()) 
+      dst = DstView(label);
+  } else if constexpr (DstView::rank == 1) {
     if (!dst.is_allocated() || dst.extent(0) != src.extent(0)) {
       dst = DstView(label, src.extent(0));
     }
