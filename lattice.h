@@ -22,12 +22,12 @@ class Lattice {
 public:
     int lattice_side;
     int number_of_nodes;
-    std::valarray<int> map_of_contacts_int;
-    std::valarray<int> inverse_steps;
+    Kokkos::View<int*, Kokkos::HostSpace> map_of_contacts_int;
+    Kokkos::View<int*, Kokkos::HostSpace> inverse_steps;
 };
 
 class Lattice_2D : public Lattice {
-
+    public:
     Lattice_2D(int max_seq_size = 0);
     int ndim2()  {return 4;};
 
@@ -35,7 +35,7 @@ class Lattice_2D : public Lattice {
 };
 
 class Lattice_3D : public Lattice {
-
+    public:
     Lattice_3D(int max_seq_size = 0);
 
     int ndim2()  {return 6;};
