@@ -1,21 +1,12 @@
 #include"Model.h"
 
 
-//used to increase length of SAWs for lattice side
-#ifndef OUT_Length
-#define OUT_Length 4
-#endif
-//used to define lattice nodes without spins (SAW does not go over this node)
-#ifndef NO_SAW_NODE
-#define NO_SAW_NODE -1
-#endif
-//used to define lattice nodes without XY spins
-#ifndef NO_XY_SPIN
-#define NO_XY_SPIN -100
-#endif
-
-template class SAW_model<float>;
-template class SAW_model<int>;
+template class SAW_model<float, 2>;
+template class SAW_model<float, 3>;
+template class SAW_model<int, 2>;
+template class SAW_model<int, 3>;
+template class XY_LI<2>;
+template class XY_LI<3>;
 
 Model::Model(int L) : L(L) {
     #ifdef REGIME_2D
@@ -28,16 +19,16 @@ Model::Model(int L) : L(L) {
     L_host() = L;
 };
 
-template<class T>
-SAW_model<T>::SAW_model(int L) : Model(L) {
+template<class T, int Dim>
+SAW_model<T, Dim>::SAW_model(int L) : Model(L) {
     geometry_initialization_arrays();
     geometry_initialization_stick();
     scalars_MC_preparation();
 
 }
 
-template<class T>
-void SAW_model<T>::scalars_MC_preparation(){
+template<class T, int Dim>
+void SAW_model<T, Dim>::scalars_MC_preparation(){
     hostdata.E                  = Kokkos::View<float*, Kokkos::HostSpace>("E", N_CHAINS);
     hostdata.newE               = Kokkos::View<float*, Kokkos::HostSpace>("newE", N_CHAINS);
     
@@ -74,8 +65,8 @@ void SAW_model<T>::scalars_MC_preparation(){
     }
 }
 
-template<class T>
-void SAW_model<T>::geometry_initialization_arrays(){
+template<class T, int Dim>
+void SAW_model<T, Dim>::geometry_initialization_arrays(){
     hostdata.next_monomers = Kokkos::View<int **, Kokkos::HostSpace> ("next_monomers", N_CHAINS, lattice-> NumberOfNodes());
     hostdata.previous_monomers = Kokkos::View<int **, Kokkos::HostSpace> ("previous_monomers", N_CHAINS, lattice-> NumberOfNodes());
     hostdata.directions = Kokkos::View<int **, Kokkos::HostSpace> ("directions", N_CHAINS, lattice-> NumberOfNodes());
@@ -92,8 +83,8 @@ void SAW_model<T>::geometry_initialization_arrays(){
 }
  
  
-template<class T>
-void SAW_model<T>::geometry_initialization_stick() {
+template<class T, int Dim>
+void SAW_model<T, Dim>::geometry_initialization_stick() {
 
     for (int chain = 0; chain < N_CHAINS; chain++) {
         hostdata.start_conformation(chain) = 0;
@@ -115,11 +106,14 @@ void SAW_model<T>::geometry_initialization_stick() {
     }
 }
 
-XY_LI::XY_LI (int L) : SAW_model<float>(L) {
+
+template<int Dim>
+XY_LI<Dim>::XY_LI (int L) : SAW_model<float, Dim>(L) {
     spin_init_random();
 };
 
-void XY_LI::spin_init_random() {
+template<int Dim>
+void XY_LI<Dim>::spin_init_random() {
 
     std::uniform_real_distribution<float> distribution_theta(0, 2.0*PI);
     std::mt19937 generators_theta;
@@ -130,22 +124,17 @@ void XY_LI::spin_init_random() {
 
     for (int chain = 0; chain < N_CHAINS; chain++) { 
 
-        for (int i = 0; i < L; i++) {
+        for (int i = 0; i < this->L; i++) {
             hostdata.sequence_on_lattice(chain, i) =  distribution_theta(generators_theta);
         }
 
     }
 }
 
-void XY_LI::start_kernel_energy_init() {
-    auto d = this->devicedata;
-
-    using team_policy = Kokkos::TeamPolicy<Kokkos::Cuda>;
-    team_policy policy(N_CHAINS, Kokkos::AUTO());
-
-    Kokkos::parallel_for("MCMC_Start", policy,
-        StartFunctor{d}
-      );
-
-      Kokkos::fence();
+template<int Dim>
+void XY_LI<Dim>::start_kernel_energy_init() {
+   //auto d = this->devicedata;
+   XY_LI_EnergyOp op{ this->devicedata };
+   this->energy_init(op);
+ 
 }

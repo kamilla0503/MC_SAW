@@ -5,6 +5,20 @@
 #include <string>
 #include <type_traits>
 
+//used to increase length of SAWs for lattice side
+#ifndef OUT_Length
+#define OUT_Length 4
+#endif
+//used to define lattice nodes without spins (SAW does not go over this node)
+#ifndef NO_SAW_NODE
+#define NO_SAW_NODE -1
+#endif
+//used to define lattice nodes without XY spins
+#ifndef NO_XY_SPIN
+#define NO_XY_SPIN -100
+#endif
+
+
 const float PI = std::atan(1.0)*4; 
 
 template<class DstView, class SrcView>
@@ -38,5 +52,59 @@ void realloc_like_and_copy(DstView& dst, const SrcView& src, const std::string& 
   Kokkos::deep_copy(dst, src);
 }
 
+KOKKOS_INLINE_FUNCTION
+uint64_t splitmix64(uint64_t x) {
+  x += 0x9E3779B97F4A7C15ull;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+  return x ^ (x >> 31);
+}
+
+KOKKOS_INLINE_FUNCTION
+double u01(uint64_t x) {               // [0,1)
+  return (x >> 11) * (1.0/9007199254740992.0);
+}
+
+KOKKOS_INLINE_FUNCTION
+double rand_chain_step(uint64_t seed, int chain, long long step, int stream) {
+  uint64_t key = seed
+    ^ (0xA24BAED4963EE407ull * (uint64_t)(chain+1))
+    ^ (0x9E3779B97F4A7C15ull * (uint64_t)(step*4 + stream));
+  return u01(splitmix64(key));
+}
+
+struct IsingSpinProposal {
+  template<class Pool, class TeamMember>
+  KOKKOS_INLINE_FUNCTION
+  int propose(const TeamMember& team, Pool& pool, int c, int site) const {
+    auto state = pool.get_state();
+    const double u = state.drand();        // [0,1)
+    pool.free_state(state);
+    return (u < 0.5) ? -1 : +1;
+  }
+};
+
+struct XYSpinProposal {
+  float two_pi;
+
+  XYSpinProposal() : two_pi(6.283185307179586f) {}
+
+  template<class Pool, class TeamMember>
+  KOKKOS_INLINE_FUNCTION
+  float propose(const TeamMember& team, Pool& pool, int c, int site) const {
+    auto state = pool.get_state();
+    const double u = state.drand();        // [0,1)
+    pool.free_state(state);
+    return float(u) * two_pi;
+  }
+};
+
+template<class T>
+struct SpinProposalTraits;
+
+template<>
+struct SpinProposalTraits<int> {
+  using type = IsingSpinProposal;
+};
 
 #endif

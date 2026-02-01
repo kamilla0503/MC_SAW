@@ -52,4 +52,53 @@ class Lattice_3D : public Lattice {
     float radius(const int& start, const int& end);
 };
 
+
+KOKKOS_INLINE_FUNCTION
+float radius_sq_3d(const int& start, const int& end, const int& lattice_side) {
+    int start_x = start % lattice_side;
+    int start_y = (start % (lattice_side * lattice_side)) /lattice_side;
+    int start_z = start / (lattice_side * lattice_side);
+    int end_x = end % lattice_side;
+    int end_y = (end % (lattice_side * lattice_side)) /lattice_side;
+    int end_z = end / (lattice_side * lattice_side);
+
+    //torus distance;
+    float xdiff = abs(end_x - start_x);
+    if (xdiff > (lattice_side/2))
+        xdiff = lattice_side - xdiff;
+
+    float ydiff = abs(end_y - start_y);
+    if (ydiff > (lattice_side / 2))
+        ydiff = lattice_side - ydiff;
+
+    float zdiff = abs(end_z - start_z);
+    if (zdiff > (lattice_side / 2))
+        zdiff = lattice_side - zdiff;
+
+    float r = xdiff *xdiff  + ydiff*ydiff + zdiff*zdiff;
+
+    return r;
+}
+
+KOKKOS_INLINE_FUNCTION
+float radius_sq_2d(const int& start, const int& end, const int& lattice_side) {
+    int start_x = start % lattice_side;
+    int start_y = start / lattice_side;
+    int end_x = end % lattice_side;
+    int end_y = end / lattice_side;
+
+    //torus distance;
+    float xdiff = abs(end_x - start_x);
+    if (xdiff > (lattice_side/2))
+        xdiff = lattice_side - xdiff;
+
+    float ydiff = abs(end_y - start_y);
+    if (ydiff > (lattice_side / 2))
+        ydiff = lattice_side - ydiff;
+
+    float r = xdiff *xdiff  + ydiff*ydiff ;
+
+    return r;
+}
+
 #endif
