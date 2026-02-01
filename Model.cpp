@@ -56,7 +56,22 @@ void SAW_model<T>::scalars_MC_preparation(){
     hostdata.flipMoveType= Kokkos::View<float*, Kokkos::HostSpace>("flipMoveType", N_CHAINS);
     hostdata.d_E_1       = Kokkos::View<float*, Kokkos::HostSpace>("d_E_1", N_CHAINS);
     hostdata.J_chain     = Kokkos::View<float*, Kokkos::HostSpace>("J_chain", N_CHAINS);
-    
+
+    int N_pairs = L*(L-1)/2;
+    hostdata.N_pairs = Kokkos::View<int, Kokkos::HostSpace>("N_pairs");
+    hostdata.N_pairs() = N_pairs;
+
+    hostdata.i_index = Kokkos::View<int*, Kokkos::HostSpace>("i_index", N_pairs);
+    hostdata.j_index = Kokkos::View<int*, Kokkos::HostSpace>("j_index", N_pairs);
+
+    int i_pair = 0 ;
+    for (int i =0; i < L; i++) {
+        for (int j = i + 1; j < L; j++) {
+            hostdata.i_index(i_pair) = i;
+            hostdata.j_index(i_pair) = j;
+            i_pair += 1;
+        }
+    }
 }
 
 template<class T>
@@ -120,4 +135,17 @@ void XY_LI::spin_init_random() {
         }
 
     }
+}
+
+void XY_LI::start_kernel_energy_init() {
+    auto d = this->devicedata;
+
+    using team_policy = Kokkos::TeamPolicy<Kokkos::Cuda>;
+    team_policy policy(N_CHAINS, Kokkos::AUTO());
+
+    Kokkos::parallel_for("MCMC_Start", policy,
+        StartFunctor{d}
+      );
+
+      Kokkos::fence();
 }

@@ -55,6 +55,10 @@ struct DeviceData {
   Kokkos::View<float*, ExecSpace> d_E_1; 
   Kokkos::View<float*, ExecSpace> J_chain;
 
+  //helpers ?
+  Kokkos::View<int*, ExecSpace> i_index;
+  Kokkos::View<int*, ExecSpace> j_index;
+  Kokkos::View<int, ExecSpace> N_pairs;
 };
 
 
@@ -81,6 +85,7 @@ public:
 
     // SAW_model(int L) : Model(L) {};
     virtual void spin_init_random() = 0;
+    virtual void start_kernel_energy_init() = 0;
 
     void geometry_initialization_arrays();
 
@@ -103,6 +108,49 @@ public:
     XY_LI (int L);
 
     void spin_init_random();
+    void start_kernel_energy_init() override;
+
+
+    using ExecSpace   = Kokkos::Cuda;
+    using team_policy = Kokkos::TeamPolicy<ExecSpace>;
+    using member_type = team_policy::member_type;
+
+    struct StartFunctor {
+      DeviceData<Kokkos::CudaSpace, float> d;
+
+      KOKKOS_INLINE_FUNCTION
+      void hierarchicalEnergy(const member_type& team,
+                              const DeviceData<Kokkos::CudaSpace, float>& flip_data,
+                              int c) const
+      {
+        Kokkos::parallel_reduce(
+          Kokkos::TeamThreadRange(team,  flip_data.N_pairs() ),
+          [&](const int ind, float &H_total) {
+               //   if (flip_data.accept_move()) {
+                  int i = flip_data.i_index(ind);
+                  int j = flip_data.j_index(ind);
+                  int pos_i   = flip_data.lattice_nodes_positions(c, i);
+                  float theta_i  = flip_data.sequence_on_lattice(c, pos_i);
+                  int pos_j  = flip_data.lattice_nodes_positions(c, j);
+                  float theta_j = flip_data.sequence_on_lattice(c, pos_j);
+                  float r_val   = radius(pos_i, pos_j, flip_data.lattice_side_device(),flip_data);
+                  r_val = Kokkos::sqrt(r_val) * Kokkos::sqrt(r_val) * Kokkos::sqrt(r_val);
+                  H_total -= Kokkos::cos(theta_i - theta_j) / r_val;
+              //}
+          },
+          flip_data.newE(c)
+        );
+      }
+
+      KOKKOS_INLINE_FUNCTION
+      void operator()(const member_type& team) const {
+        const int c = team.league_rank();
+        hierarchicalEnergy(team, d, c);
+        d.E(c) = d.newE(c);
+      }
+  
+
+    };
 };
 
 
@@ -154,7 +202,10 @@ public:
   X(accept_move) \
   X(flipMoveType) \
   X(d_E_1) \
-  X(J_chain)
+  X(J_chain) \
+  X(i_index) \
+  X(j_index) \
+  X(N_pairs)
   
 template<class ExecSpace, class T>
 void upload_all(const DeviceData<Kokkos::HostSpace, T>& h, DeviceData<ExecSpace, T>& d) {
@@ -184,6 +235,41 @@ void SAW_model<T>::HostDataInit() {
 template<class T>
 void SAW_model<T>::DeviceDataInit() {
     upload_all<Kokkos::CudaSpace, T>(hostdata, devicedata);
+
+    start_kernel_energy_init();
 }
+
+
+template<class ExecSpace, class T, class EnergyOp, int Dim>
+struct MetropolisKernel {
+  using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
+  DeviceData<typename ExecSpace::memory_space, T> d;
+
+
+  EnergyOp energy;       // model-specific
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const member_type& team) const {
+    const int c = team.league_rank();
+
+    // propose move uses flip (you likely already do this)
+    // ...
+
+    // *** The ONLY model-specific line: ***
+    const float dE = energy.delta_energy(team, d, c);
+
+    // accept / reject (generic)
+    // Example: accept if dE <= 0 or with exp(-beta*dE)
+    // You'll have your RNG handling here
+    // ...
+
+    // commit energy if accepted
+    // d.E(c) = d.newE(c) or d.E(c) += dE, whichever you use
+  }
+
+
+
+};
+
 
 #endif
