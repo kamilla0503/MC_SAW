@@ -1,18 +1,18 @@
 #ifndef INTERACTION_SAW_MODELS_MODEL_H
 #define INTERACTION_SAW_MODELS_MODEL_H
 
+#include<iostream>
+#include <random>
+#include <fstream>
+#include <chrono>
+
+
 #include"common.h"
 #include"lattice.h"
 
 #ifndef N_CHAINS
 #define N_CHAINS 16
 #endif
-
-// struct HostData {
-//     Kokkos::View<int*, Kokkos::HostSpace> map_of_contacts_int;
-//     Kokkos::View<int*, Kokkos::HostSpace> inverse_steps;
-
-//   };
 
 template<class ExecSpace, class T>
 struct DeviceData {
@@ -35,6 +35,26 @@ struct DeviceData {
 
   Kokkos::View<int*, ExecSpace> start_conformation;
   Kokkos::View<int*, ExecSpace> end_conformation;
+
+  //Energy state 
+  Kokkos::View<float*, ExecSpace> E;
+  Kokkos::View<float*, ExecSpace> newE;
+
+  //MC usable variables 
+  Kokkos::View<T*, ExecSpace> oldspin;
+  Kokkos::View<int*, ExecSpace> oldIndex; // not index --- it is really coord 
+  Kokkos::View<int*, ExecSpace> newIndex; // not index --- it is really coord 
+  Kokkos::View<int*, ExecSpace> save_start_conformation;
+  Kokkos::View<int*, ExecSpace> save_end_conformation;
+  Kokkos::View<int*, ExecSpace> start_index_in_nodes_position;
+  Kokkos::View<int*, ExecSpace> direction;
+  Kokkos::View<T*, ExecSpace> spinValue;
+
+  Kokkos::View<int*, ExecSpace> accept_move; 
+  Kokkos::View<float*, ExecSpace> flipMoveType;
+  Kokkos::View<float*, ExecSpace> d_E_1; 
+  Kokkos::View<float*, ExecSpace> J_chain;
+
 };
 
 
@@ -60,10 +80,13 @@ public:
     SAW_model<T>(int L);
 
     // SAW_model(int L) : Model(L) {};
+    virtual void spin_init_random() = 0;
 
     void geometry_initialization_arrays();
 
     void geometry_initialization_stick();
+
+    void scalars_MC_preparation();
 
 
     void HostDataInit();
@@ -77,7 +100,9 @@ public:
 
 class XY_LI : public SAW_model<float> {
 public:
-    XY_LI (int L) : SAW_model<float>(L) {};
+    XY_LI (int L);
+
+    void spin_init_random();
 };
 
 
@@ -103,8 +128,33 @@ public:
   X(map_of_contacts_int) \
   X(inverse_steps) \
   X(L) \
-  X(lattice_side_device)
-  
+  X(lattice_side_device) \
+  X(sequence_on_lattice) \
+  X(next_monomers) \
+  X(previous_monomers) \
+  X(directions) \
+  X(lattice_nodes_positions) \
+  X(start_conformation) \
+  X(end_conformation) \
+  /* Energy state */ \
+  X(E) \
+  X(newE) \
+  \
+  /* MC usable variables */ \
+  X(oldspin) \
+  X(oldIndex) \
+  X(newIndex) \
+  X(save_start_conformation) \
+  X(save_end_conformation) \
+  X(start_index_in_nodes_position) \
+  X(direction) \
+  X(spinValue) \
+  \
+  /* MC move bookkeeping */ \
+  X(accept_move) \
+  X(flipMoveType) \
+  X(d_E_1) \
+  X(J_chain)
   
 template<class ExecSpace, class T>
 void upload_all(const DeviceData<Kokkos::HostSpace, T>& h, DeviceData<ExecSpace, T>& d) {

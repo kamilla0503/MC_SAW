@@ -11,7 +11,7 @@
 #endif
 //used to define lattice nodes without XY spins
 #ifndef NO_XY_SPIN
-#define NO_XY_SPIN -5
+#define NO_XY_SPIN -100
 #endif
 
 template class SAW_model<float>;
@@ -31,9 +31,32 @@ Model::Model(int L) : L(L) {
 template<class T>
 SAW_model<T>::SAW_model(int L) : Model(L) {
     geometry_initialization_arrays();
-
     geometry_initialization_stick();
+    scalars_MC_preparation();
 
+}
+
+template<class T>
+void SAW_model<T>::scalars_MC_preparation(){
+    hostdata.E                  = Kokkos::View<float*, Kokkos::HostSpace>("E", N_CHAINS);
+    hostdata.newE               = Kokkos::View<float*, Kokkos::HostSpace>("newE", N_CHAINS);
+    
+    hostdata.oldspin            = Kokkos::View<T*, Kokkos::HostSpace>("oldspin", N_CHAINS);
+    hostdata.oldIndex           = Kokkos::View<int*, Kokkos::HostSpace>("oldIndex", N_CHAINS);
+    hostdata.newIndex           = Kokkos::View<int*, Kokkos::HostSpace>("newIndex", N_CHAINS);
+    
+    hostdata.save_start_conformation        = Kokkos::View<int*, Kokkos::HostSpace>("save_start_conformation", N_CHAINS);
+    hostdata.save_end_conformation          = Kokkos::View<int*, Kokkos::HostSpace>("save_end_conformation", N_CHAINS);
+    hostdata.start_index_in_nodes_position  = Kokkos::View<int*, Kokkos::HostSpace>("start_index_in_nodes_position", N_CHAINS);
+    
+    hostdata.direction          = Kokkos::View<int*, Kokkos::HostSpace>("direction", N_CHAINS);
+    hostdata.spinValue          = Kokkos::View<T*, Kokkos::HostSpace>("spinValue", N_CHAINS);
+
+    hostdata.accept_move = Kokkos::View<int*,   Kokkos::HostSpace>("accept_move", N_CHAINS);
+    hostdata.flipMoveType= Kokkos::View<float*, Kokkos::HostSpace>("flipMoveType", N_CHAINS);
+    hostdata.d_E_1       = Kokkos::View<float*, Kokkos::HostSpace>("d_E_1", N_CHAINS);
+    hostdata.J_chain     = Kokkos::View<float*, Kokkos::HostSpace>("J_chain", N_CHAINS);
+    
 }
 
 template<class T>
@@ -42,6 +65,11 @@ void SAW_model<T>::geometry_initialization_arrays(){
     hostdata.previous_monomers = Kokkos::View<int **, Kokkos::HostSpace> ("previous_monomers", N_CHAINS, lattice-> NumberOfNodes());
     hostdata.directions = Kokkos::View<int **, Kokkos::HostSpace> ("directions", N_CHAINS, lattice-> NumberOfNodes());
     hostdata.lattice_nodes_positions = Kokkos::View<int **, Kokkos::HostSpace> ("lattice_nodes_positions", N_CHAINS, lattice-> NumberOfNodes());
+
+    //Fill emoty nodes in lattice 
+    Kokkos::deep_copy(hostdata.next_monomers, NO_SAW_NODE);
+    Kokkos::deep_copy(hostdata.previous_monomers, NO_SAW_NODE);
+    Kokkos::deep_copy(hostdata.directions, NO_SAW_NODE);
 
     hostdata.start_conformation = Kokkos::View<int *, Kokkos::HostSpace> ("start_conformation", N_CHAINS);
     hostdata.end_conformation = Kokkos::View<int *, Kokkos::HostSpace> ("end_conformation", N_CHAINS);
@@ -70,6 +98,26 @@ void SAW_model<T>::geometry_initialization_stick() {
             hostdata.directions(chain, i) = 0; //all directions_h are the right moves
         }
     }
+}
 
+XY_LI::XY_LI (int L) : SAW_model<float>(L) {
+    spin_init_random();
+};
 
+void XY_LI::spin_init_random() {
+
+    std::uniform_real_distribution<float> distribution_theta(0, 2.0*PI);
+    std::mt19937 generators_theta;
+    generators_theta.seed(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    hostdata.sequence_on_lattice = Kokkos::View<float**, Kokkos::HostSpace>("sequence_on_lattice", N_CHAINS, lattice-> NumberOfNodes());
+    Kokkos::deep_copy(hostdata.sequence_on_lattice, NO_XY_SPIN);
+
+    for (int chain = 0; chain < N_CHAINS; chain++) { 
+
+        for (int i = 0; i < L; i++) {
+            hostdata.sequence_on_lattice(chain, i) =  distribution_theta(generators_theta);
+        }
+
+    }
 }

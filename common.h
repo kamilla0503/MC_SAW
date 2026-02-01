@@ -5,7 +5,7 @@
 #include <string>
 #include <type_traits>
 
- 
+const float PI = std::atan(1.0)*4; 
 
 template<class DstView, class SrcView>
 void realloc_like_and_copy(DstView& dst, const SrcView& src, const std::string& label) {
