@@ -20,15 +20,15 @@ Model::Model(int L) : L(L) {
 };
 
 template<class T, int Dim>
-SAW_model<T, Dim>::SAW_model(int L) : Model(L) {
+SAW_model<T, Dim>::SAW_model(int L,  float Jmin, float Jmax) : Model(L) {
     geometry_initialization_arrays();
     geometry_initialization_stick();
-    scalars_MC_preparation();
+    scalars_MC_preparation(Jmin, Jmax);
 
 }
 
 template<class T, int Dim>
-void SAW_model<T, Dim>::scalars_MC_preparation(){
+void SAW_model<T, Dim>::scalars_MC_preparation(float Jmin, float Jmax){
     hostdata.E                  = Kokkos::View<float*, Kokkos::HostSpace>("E", N_CHAINS);
     hostdata.newE               = Kokkos::View<float*, Kokkos::HostSpace>("newE", N_CHAINS);
     
@@ -63,6 +63,11 @@ void SAW_model<T, Dim>::scalars_MC_preparation(){
             i_pair += 1;
         }
     }
+
+    for (int c = 0; c < N_CHAINS; ++c) {
+        hostdata.J_chain(c) = Jmin + (Jmax - Jmin) * (float(c) / (N_CHAINS - 1));
+    }
+ 
 }
 
 template<class T, int Dim>
@@ -108,7 +113,7 @@ void SAW_model<T, Dim>::geometry_initialization_stick() {
 
 
 template<int Dim>
-XY_LI<Dim>::XY_LI (int L) : SAW_model<float, Dim>(L) {
+XY_LI<Dim>::XY_LI (int L, float Jmin, float Jmax) : SAW_model<float, Dim>(L, Jmin, Jmax) {
     spin_init_random();
 };
 

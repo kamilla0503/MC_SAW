@@ -17,6 +17,9 @@
 
 template<class ExecSpace, class T>
 struct DeviceData {
+
+  using Layout = Kokkos::LayoutRight; 
+
   //LATTICE: 
     Kokkos::View<int*, ExecSpace> map_of_contacts_int;
     Kokkos::View<int*, ExecSpace> inverse_steps;
@@ -29,11 +32,11 @@ struct DeviceData {
     
 
   //MODEl ARRAYS 
-  Kokkos::View<T **, ExecSpace> sequence_on_lattice;
-  Kokkos::View<int **, ExecSpace> next_monomers;
-  Kokkos::View<int **, ExecSpace> previous_monomers;
-  Kokkos::View<int **, ExecSpace> directions;
-  Kokkos::View<int **, ExecSpace> lattice_nodes_positions;
+  Kokkos::View<T **, Layout, ExecSpace> sequence_on_lattice;
+  Kokkos::View<int **, Layout, ExecSpace> next_monomers;
+  Kokkos::View<int **, Layout, ExecSpace> previous_monomers;
+  Kokkos::View<int **, Layout, ExecSpace> directions;
+  Kokkos::View<int **, Layout, ExecSpace> lattice_nodes_positions;
 
   Kokkos::View<int*, ExecSpace> start_conformation;
   Kokkos::View<int*, ExecSpace> end_conformation;
@@ -88,7 +91,7 @@ public:
 template<class T, int Dim>
 class SAW_model : public Model {
 public:
-    SAW_model<T, Dim>(int L);
+    SAW_model<T, Dim>(int L,  float Jmin = 0.25, float Jmax = 0.26);
 
     // SAW_model(int L) : Model(L) {};
     virtual void spin_init_random() = 0;
@@ -98,7 +101,7 @@ public:
 
     void geometry_initialization_stick();
 
-    void scalars_MC_preparation();
+    void scalars_MC_preparation(float Jmin, float Jmax);
 
 
     void HostDataInit();
@@ -107,6 +110,62 @@ public:
     //HostData hostdata;
     DeviceData<Kokkos::CudaSpace, T> devicedata;
     DeviceData<Kokkos::HostSpace, T> hostdata;
+
+
+    template<class ExecSpace, class EnergyOp, class SpinProposalOp>
+struct MetropolisKernel {
+  using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
+  DeviceData<typename ExecSpace::memory_space, T> d;
+  EnergyOp energy;       // model-specific
+  SpinProposalOp propose_spin;        // model-specific
+  Kokkos::Random_XorShift64_Pool<ExecSpace> pool;
+
+  long long n_iters;
+  long long epoch1;
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const member_type& team) const {
+    const int c = team.league_rank();
+
+    for (long long step = 1; step <= n_iters; ++step) {
+      Kokkos::single(Kokkos::PerTeam(team), [&](){
+        d.flipMoveType(c) = rand_chain_step(12345, c, step * epoch1, 0);
+      });
+      team.team_barrier();
+
+      // Propose geometry (common)
+      if (d.flipMoveType(c) < 0.5f) {
+        hierarchicalFlipMoveAddEnd(team, d, c, pool, propose_spin);
+      } else {
+        hierarchicalFlipMoveAddStart(team, d, c, pool, propose_spin);
+      }
+      team.team_barrier();
+      const int geom_ok = d.accept_move(c);
+
+      if (geom_ok) {
+        // Model-specific ΔE (your “only varying piece”)
+        energy.delta_energy(team, d, c); // write d.d_E_1(c) or return dE
+      }
+      team.team_barrier();
+
+      if (geom_ok) {
+        const double u = rand_chain_step(12345, c, step * epoch1, 3);
+
+        // Accept/reject & commit (common)
+        if (d.flipMoveType(c) < 0.5f) {
+          hierarchicalOneKernel_AddEnd_FirstPart(team, d, c, pool, u);
+        } else {
+          hierarchicalOneKernel_AddStart_FirstPart(team, d, c, pool, u);
+        }
+      }
+      team.team_barrier();          
+    }
+
+    SAW_model<T, Dim>::template hierarchicalOneKernel_Reconnect(team, d, c, pool);
+    team.team_barrier();
+  }
+};
+
 
     template<class EnergyOp>
     void energy_init(EnergyOp energy) {
@@ -126,11 +185,11 @@ public:
 
     
     KOKKOS_INLINE_FUNCTION
-    void hierarchicalOneKernel_Reconnect (
+    static void hierarchicalOneKernel_Reconnect (
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
       const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
       int chain, 
-      const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool) const{
+      const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool) {
         Kokkos::single(Kokkos::PerTeam(team_member), [&]() {
           auto rand_gen =  pool.get_state(); //flip_data_local.rand_pool.get_state();
           flip_data_local.direction(chain)  = rand_gen.urand64() % 6;
@@ -184,14 +243,14 @@ public:
       }
     
 
-    template<class ExecSpace, class SpinProposalOp>
+    template<class SpinProposalOp>
     KOKKOS_INLINE_FUNCTION
-    void hierarchicalFlipMoveAddEnd(
+    static void hierarchicalFlipMoveAddEnd(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
       const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool,
-      const SpinProposalOp& propose_spin) const{
+      const SpinProposalOp& propose_spin)  {
         Kokkos::single(Kokkos::PerTeam(team_member), [&]() {
           // Example random usage
   
@@ -210,7 +269,7 @@ public:
           }
           flip_data_local.accept_move(c) = 1;
           auto rand_gen1 = pool.get_state();
-          flip_data_local.spinValue(c) = propose_spin(T{}, pool);
+          flip_data_local.spinValue(c) = propose_spin(pool);
           pool.free_state(rand_gen1);
           flip_data_local.oldspin(c) = flip_data_local.sequence_on_lattice(c, flip_data_local.start_conformation(c));
            
@@ -239,14 +298,14 @@ public:
     }
 
 
-    template<class ExecSpace, class SpinProposalOp>
+    template<class SpinProposalOp>
     KOKKOS_INLINE_FUNCTION
-    void hierarchicalFlipMoveAddStart(
+    static void hierarchicalFlipMoveAddStart(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
       const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool,
-      const SpinProposalOp& propose_spin) const{
+      const SpinProposalOp& propose_spin) {
         Kokkos::single(Kokkos::PerTeam(team_member), [&]() {
           // Example random usage
           auto rand_gen =  pool.get_state();  
@@ -262,7 +321,7 @@ public:
           }
           flip_data_local.accept_move(c) = 1;
           auto rand_gen1 = pool.get_state();
-          flip_data_local.spinValue(c) = propose_spin(T{}, pool);
+          flip_data_local.spinValue(c) = propose_spin(pool);
           pool.free_state(rand_gen1);
           //delete end
           flip_data_local.save_end_conformation(c) = flip_data_local.end_conformation(c);
@@ -290,12 +349,12 @@ public:
     }
 
     KOKKOS_INLINE_FUNCTION
-    void hierarchicalOneKernel_AddEnd_FirstPart(
+    static void hierarchicalOneKernel_AddEnd_FirstPart(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
       const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool, 
-      float q_ifaccept) const
+      float q_ifaccept)
     {
       Kokkos::single(Kokkos::PerTeam(team_member), [&]() {
  
@@ -339,12 +398,12 @@ public:
 
   
     KOKKOS_INLINE_FUNCTION
-    void hierarchicalOneKernel_AddStart_FirstPart(
+    static void hierarchicalOneKernel_AddStart_FirstPart(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
       const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool, 
-      float q_ifaccept) const
+      float q_ifaccept) 
     {
 
 
@@ -389,6 +448,92 @@ public:
 
   }
 
+
+    void parallel_tempering_swap()
+    {
+      static long long exch_id = 0;
+    
+      // 1) Copy J_chain to host and sort indices by J
+      auto J_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), devicedata.J_chain);
+    
+      std::vector<int> ord(N_CHAINS);
+      std::iota(ord.begin(), ord.end(), 0);
+      std::sort(ord.begin(), ord.end(),
+                [&](int a, int b){ return J_host(a) < J_host(b); });
+    
+      // 2) Build disjoint neighbor pairs in that sorted order and attempt exchanges
+      auto do_parity = [&](int parity) {
+        const int first = parity ? 1 : 0;
+        const int num_pairs = (N_CHAINS - first) / 2;
+        if (num_pairs <= 0) return;
+    
+        // Host buffers of replica indices to swap
+        std::vector<int> h_i(num_pairs), h_j(num_pairs);
+        for (int k = 0; k < num_pairs; ++k) {
+          h_i[k] = ord[first + 2*k];
+          h_j[k] = ord[first + 2*k + 1];
+        }
+    
+        // Copy pairs to device
+        Kokkos::View<int*, Kokkos::CudaSpace> d_i("pt_pair_i", num_pairs);
+        Kokkos::View<int*, Kokkos::CudaSpace> d_j("pt_pair_j", num_pairs);
+    
+        auto hdi = Kokkos::create_mirror_view(d_i);
+        auto hdj = Kokkos::create_mirror_view(d_j);
+        for (int k = 0; k < num_pairs; ++k) { hdi(k) = h_i[k]; hdj(k) = h_j[k]; }
+        Kokkos::deep_copy(d_i, hdi);
+        Kokkos::deep_copy(d_j, hdj);
+    
+        attempt_exchanges_on_pairs(devicedata, d_i, d_j, exch_id++);
+        Kokkos::fence();
+      };
+    
+      do_parity(0);
+      do_parity(1);
+    }
+
+
+
+    static void attempt_exchanges_on_pairs(
+      DeviceData<Kokkos::CudaSpace, T> d,
+      Kokkos::View<int*, Kokkos::CudaSpace> pair_i,
+      Kokkos::View<int*, Kokkos::CudaSpace> pair_j,
+      long long exch_id)
+  {
+    using ExecSpace = Kokkos::Cuda;
+    const int num_pairs = pair_i.extent_int(0);
+
+    Kokkos::parallel_for(
+      "PT_exchange_pairs",
+      Kokkos::RangePolicy<ExecSpace>(0, num_pairs),
+      KOKKOS_LAMBDA(const int k) {
+        const int i = pair_i(k);
+        const int j = pair_j(k);
+
+        const float Ei = d.E(i);        // energy WITHOUT J
+        const float Ej = d.E(j);
+        const float Ji = d.J_chain(i);  // beta (or coupling)
+        const float Jj = d.J_chain(j);
+
+        // Standard replica-exchange acceptance:
+        // acc = min(1, exp((Ji - Jj)*(Ei - Ej)))
+        const float expo = (Ji - Jj) * (Ei - Ej);
+        const float acc  = (expo >= 0.f) ? 1.f : expf(expo);
+
+        // Deterministic RNG like your old code
+        const double u = rand_chain_step(77777ull, i, exch_id, /*stream*/ 7);
+
+        if (u < acc) {
+          d.J_chain(i) = Jj;
+          d.J_chain(j) = Ji;
+        }
+      }
+    );
+  }
+
+
+
+
   template<class EnergyOp, class SpinProposalOp>
   void runMCMCOnDevice_impl(EnergyOp energy, SpinProposalOp propose, long long MC_STEPS, long long epoch) {
     using ExecSpace   = Kokkos::Cuda;
@@ -409,12 +554,80 @@ public:
     auto pool = my_pool;
 
     Kokkos::parallel_for("MCMC_on_device", policy,
-      MetropolisKernel<ExecSpace, T, EnergyOp, SpinProposalOp, Dim>{d, energy, propose, pool, MC_STEPS, epoch2 }
+      MetropolisKernel<ExecSpace, EnergyOp, SpinProposalOp>{d, energy, propose, pool, MC_STEPS, epoch2 }
     );
     Kokkos::fence();
     epoch2 += 1;
   }
 
+
+  void update_host_for_output() {
+    Kokkos::deep_copy(hostdata.J_chain, devicedata.J_chain);
+    Kokkos::deep_copy(hostdata.E, devicedata.E);
+    Kokkos::deep_copy(hostdata.start_index_in_nodes_position, devicedata.start_index_in_nodes_position);
+
+    Kokkos::deep_copy(hostdata.lattice_nodes_positions, devicedata.lattice_nodes_positions);
+    Kokkos::deep_copy(hostdata.sequence_on_lattice, devicedata.sequence_on_lattice);
+  }
+  void out_angle_data(std::ostream &out, long long n_steps) {
+
+    update_host_for_output();
+
+    for (int c = 0; c < N_CHAINS; ++c) {
+      out << n_steps << " " << hostdata.J_chain(c) << " " << hostdata.E(c) << " ";
+
+      for (int e = 0; e < L; ++e) {
+        const int pos = hostdata.lattice_nodes_positions(c, e);
+        out << hostdata.sequence_on_lattice(c, pos) << " ";
+      }
+      out << "\n";
+    }
+  }  
+
+
+  void out_dir_data(std::ostream &out, long long n_steps) {
+    update_host_for_output();
+
+    const int ls = lattice->lattice_size();
+
+    for (int c = 0; c < N_CHAINS; ++c) {
+      out << n_steps << " " << hostdata.J_chain(c) << " "
+          << hostdata.start_index_in_nodes_position(c) << " "
+          << hostdata.E(c) << " ";
+
+      for (int i = 0; i < L; ++i) {
+        const int pos = hostdata.lattice_nodes_positions(c, i);
+
+        const int x = pos % ls;
+
+        if constexpr (Dim == 2) {
+          const int y = pos / ls;
+          out << x << " " << y << " ";
+        } else { // Dim == 3
+          const int y = (pos / ls) % ls;
+          const int z = pos / (ls * ls);
+          out << x << " " << y << " " << z << " ";
+        }
+      }
+      out << "\n";
+    }
+  }
+
+  // Convenience: append to file (angles)
+  void append_angle_file(const std::string& filename, long long n_steps) {
+    std::ofstream out(filename, std::ios::app);
+    if (!out) throw std::runtime_error("Cannot open angles log file: " + filename);
+    out_angle_data(out, n_steps);
+  }
+
+  // Convenience: append to file (dirs)
+  void append_dir_file(const std::string& filename, long long n_steps) {
+    std::ofstream out(filename, std::ios::app);
+    if (!out) throw std::runtime_error("Cannot open dirs log file: " + filename);
+    out_dir_data(out, n_steps);
+  }
+ 
+ 
 };
 
 template<int Dim>
@@ -425,7 +638,7 @@ public:
     using Base::devicedata;
     using Base::lattice;
 
-    XY_LI (int L);
+    XY_LI (int L,float Jmin = 0.25, float Jmax = 0.26);
 
     void spin_init_random();
     void start_kernel_energy_init() override;
@@ -499,15 +712,8 @@ public:
       XY_LI_EnergyOp op{ this->devicedata };
       XYSpinProposal  propose{}; 
       this->runMCMCOnDevice_impl(op, propose, MC_STEPS, epoch);
-    }
-    
-
-    // void run_one_metropolis_sweep() {
-    //   XY_LI_EnergyOp op{ this->devicedata};
-    //   this->metropolis_step(op);
-    // }
-
- 
+      //this->parallel_tempering_swap();
+    } 
 };
 
 template<int Dim>
@@ -618,60 +824,6 @@ struct EnergyInitKernel {
 template<>
 struct SpinProposalTraits<float> {
   using type = XYSpinProposal;
-};
-
-template<class ExecSpace, class T, class EnergyOp, class SpinProposalOp, int Dim>
-struct MetropolisKernel {
-  using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
-  DeviceData<typename ExecSpace::memory_space, T> d;
-  EnergyOp energy;       // model-specific
-  SpinProposalOp propose_spin;        // model-specific
-  Kokkos::Random_XorShift64_Pool<ExecSpace> pool;
-
-  long long n_iters;
-  long long epoch1;
-
-  KOKKOS_INLINE_FUNCTION
-  void operator()(const member_type& team) const {
-    const int c = team.league_rank();
-
-    for (long long step = 1; step <= n_iters; ++step) {
-      Kokkos::single(Kokkos::PerTeam(team), [&](){
-        d.flipMoveType(c) = rand_chain_step(12345, c, step * epoch1, 0);
-      });
-      team.team_barrier();
-
-      // Propose geometry (common)
-      if (d.flipMoveType(c) < 0.5f) {
-        hierarchicalFlipMoveAddEnd(team, d, c, pool, propose_spin);
-      } else {
-        hierarchicalFlipMoveAddStart(team, d, c, pool, propose_spin);
-      }
-      team.team_barrier();
-      const int geom_ok = d.accept_move(c);
-
-      if (geom_ok) {
-        // Model-specific ΔE (your “only varying piece”)
-        energy.delta_energy(team, d, c); // write d.d_E_1(c) or return dE
-      }
-      team.team_barrier();
-
-      if (geom_ok) {
-        const double u = rand_chain_step(12345, c, step * epoch1, 3);
-
-        // Accept/reject & commit (common)
-        if (d.flipMoveType(c) < 0.5f) {
-          hierarchicalOneKernel_AddEnd_FirstPart(team, d, c, pool, u);
-        } else {
-          hierarchicalOneKernel_AddStart_FirstPart(team, d, c, pool, u);
-        }
-      }
-      team.team_barrier();          
-    }
-
-    hierarchicalOneKernel_Reconnect(team, d, c, pool);
-    team.team_barrier();
-  }
 };
 
 

@@ -20,6 +20,7 @@ option(Kokkos_ENABLE_CUDA "Enable CUDA in Kokkos" ON)
 option(Kokkos_ENABLE_OPENMP "Enable OpenMP in Kokkos" OFF)
 option(Kokkos_ENABLE_SERIAL "Enable Serial in Kokkos" ON)
 option(Kokkos_ENABLE_TESTS "Enable Kokkos tests" OFF)
+option(Kokkos_ENABLE_CUDA_RELOCATABLE_DEVICE_CODE ON)
 
 # GPU architecture flags:
 option(Kokkos_ARCH_VOLTA70 "Build Kokkos for Volta70 (sm_70)" OFF)

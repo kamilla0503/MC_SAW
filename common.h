@@ -74,31 +74,29 @@ double rand_chain_step(uint64_t seed, int chain, long long step, int stream) {
 }
 
 struct IsingSpinProposal {
-  template<class Pool, class TeamMember>
+  template<class Pool>
   KOKKOS_INLINE_FUNCTION
-  int propose(const TeamMember& team, Pool& pool, int c, int site) const {
+  int operator()(Pool& pool) const {
     auto state = pool.get_state();
-    const double u = state.drand();        // [0,1)
+    const double u = state.drand();   // [0,1)
     pool.free_state(state);
     return (u < 0.5) ? -1 : +1;
   }
 };
 
 struct XYSpinProposal {
-  float two_pi;
+  static constexpr float two_pi = 6.283185307179586f;
 
-  XYSpinProposal() : two_pi(6.283185307179586f) {}
-
-  template<class Pool, class TeamMember>
+  template<class Pool>
   KOKKOS_INLINE_FUNCTION
-  float propose(const TeamMember& team, Pool& pool, int c, int site) const {
+  float operator()(Pool& pool) const {
     auto state = pool.get_state();
-    const double u = state.drand();        // [0,1)
+    const double u = state.drand();   // [0,1)
     pool.free_state(state);
-    return float(u) * two_pi;
+    return static_cast<float>(u) * two_pi;
   }
 };
-
+ 
 template<class T>
 struct SpinProposalTraits;
 
