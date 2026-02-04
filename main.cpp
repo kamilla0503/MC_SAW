@@ -18,7 +18,7 @@ int main(int argc, char *argv[]) {
     float Jmax = std::stod(argv[3]);
 
 
-    XY_LI<2>* xy_li = new XY_LI<2>(L);
+    XY_LI<3>* xy_li = new XY_LI<3>(L, Jmin, Jmax);
     xy_li->HostDataInit();
     xy_li->DeviceDataInit();
 

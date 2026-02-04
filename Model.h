@@ -182,6 +182,8 @@ struct MetropolisKernel {
         EnergyInitKernel<ExecSpace, T, EnergyOp, Dim>{d, energy}
       );
       Kokkos::fence();
+
+      
     }
 
     
@@ -452,7 +454,6 @@ struct MetropolisKernel {
 
     void parallel_tempering_swap()
     {
-      printf("Swap ! \n");
       static long long exch_id = 0;
     
       // 1) Copy J_chain to host and sort indices by J
@@ -807,6 +808,21 @@ void SAW_model<T,Dim>::DeviceDataInit() {
     upload_all<Kokkos::CudaSpace, T>(hostdata, devicedata);
 
     start_kernel_energy_init();
+
+    auto E_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), devicedata.E);
+    auto L_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), devicedata.L);
+    auto Np_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), devicedata.N_pairs);
+    auto side_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), devicedata.lattice_side_device);
+    auto ndim2_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), devicedata.ndim2);
+    
+    std::cout << "DEVICE scalars: L=" << L_h()
+              << " N_pairs=" << Np_h()
+              << " side=" << side_h()
+              << " ndim2=" << ndim2_h() << "\n";
+    
+    for (int c = 0; c < N_CHAINS; ++c) {
+      std::cout << "E[" << c << "]=" << E_h(c) << "\n";
+    }    
 }
 
 template<class ExecSpace, class T, class EnergyOp, int Dim>

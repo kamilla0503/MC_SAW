@@ -9,11 +9,11 @@ template class XY_LI<2>;
 template class XY_LI<3>;
 
 Model::Model(int L) : L(L) {
-    #ifdef REGIME_2D
-    lattice = new Lattice_2D(2 * L + OUT_Length);
-#else
+ //   #ifdef REGIME_2D
+ //   lattice = new Lattice_2D(2 * L + OUT_Length);
+//#else
     lattice = new Lattice_3D(0.75*L+OUT_Length);
-#endif
+//#endif
 
     L_host = Kokkos::View<int, Kokkos::HostSpace>("L");
     L_host() = L;
@@ -38,7 +38,7 @@ void SAW_model<T, Dim>::scalars_MC_preparation(float Jmin, float Jmax){
     
     hostdata.save_start_conformation        = Kokkos::View<int*, Kokkos::HostSpace>("save_start_conformation", N_CHAINS);
     hostdata.save_end_conformation          = Kokkos::View<int*, Kokkos::HostSpace>("save_end_conformation", N_CHAINS);
-    hostdata.start_index_in_nodes_position  = Kokkos::View<int*, Kokkos::HostSpace>("start_index_in_nodes_position", N_CHAINS);
+   // hostdata.start_index_in_nodes_position  = Kokkos::View<int*, Kokkos::HostSpace>("start_index_in_nodes_position", N_CHAINS);
     
     hostdata.direction          = Kokkos::View<int*, Kokkos::HostSpace>("direction", N_CHAINS);
     hostdata.spinValue          = Kokkos::View<T*, Kokkos::HostSpace>("spinValue", N_CHAINS);
@@ -75,12 +75,15 @@ void SAW_model<T, Dim>::geometry_initialization_arrays(){
     hostdata.next_monomers = Kokkos::View<int **, Kokkos::HostSpace> ("next_monomers", N_CHAINS, lattice-> NumberOfNodes());
     hostdata.previous_monomers = Kokkos::View<int **, Kokkos::HostSpace> ("previous_monomers", N_CHAINS, lattice-> NumberOfNodes());
     hostdata.directions = Kokkos::View<int **, Kokkos::HostSpace> ("directions", N_CHAINS, lattice-> NumberOfNodes());
-    hostdata.lattice_nodes_positions = Kokkos::View<int **, Kokkos::HostSpace> ("lattice_nodes_positions", N_CHAINS, lattice-> NumberOfNodes());
+    hostdata.lattice_nodes_positions = Kokkos::View<int **, Kokkos::HostSpace> ("lattice_nodes_positions", N_CHAINS,L);
 
     //Fill emoty nodes in lattice 
     Kokkos::deep_copy(hostdata.next_monomers, NO_SAW_NODE);
     Kokkos::deep_copy(hostdata.previous_monomers, NO_SAW_NODE);
     Kokkos::deep_copy(hostdata.directions, NO_SAW_NODE);
+
+    hostdata.start_index_in_nodes_position  = Kokkos::View<int*, Kokkos::HostSpace>("start_index_in_nodes_position", N_CHAINS);
+    Kokkos::deep_copy(hostdata.start_index_in_nodes_position, 0);
 
     hostdata.start_conformation = Kokkos::View<int *, Kokkos::HostSpace> ("start_conformation", N_CHAINS);
     hostdata.end_conformation = Kokkos::View<int *, Kokkos::HostSpace> ("end_conformation", N_CHAINS);
