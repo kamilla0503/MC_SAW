@@ -11,7 +11,8 @@
 int main(int argc, char *argv[]) {
 
     Kokkos::initialize(Kokkos::InitializationSettings() );
-    
+    std::cout << "DefaultExecutionSpace = " 
+          << Kokkos::DefaultExecutionSpace::name() << "\n";
     int L = std::atoi(argv[1]);
     float Jmin = std::stod(argv[2]);
     float Jmax = std::stod(argv[3]);

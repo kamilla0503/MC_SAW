@@ -172,7 +172,8 @@ struct MetropolisKernel {
       using ExecSpace   = Kokkos::Cuda;
       using team_policy = Kokkos::TeamPolicy<ExecSpace>;
 
-      team_policy policy(N_CHAINS, Kokkos::AUTO());
+      //team_policy policy(N_CHAINS, Kokkos::AUTO());
+      team_policy policy(N_CHAINS, 500, 1);
 
       auto d = devicedata;
 
@@ -268,9 +269,9 @@ struct MetropolisKernel {
               return;  // skip the rest
           }
           flip_data_local.accept_move(c) = 1;
-          auto rand_gen1 = pool.get_state();
+         // auto rand_gen1 = pool.get_state();
           flip_data_local.spinValue(c) = propose_spin(pool);
-          pool.free_state(rand_gen1);
+        //  pool.free_state(rand_gen1);
           flip_data_local.oldspin(c) = flip_data_local.sequence_on_lattice(c, flip_data_local.start_conformation(c));
            
   
@@ -320,9 +321,9 @@ struct MetropolisKernel {
               return;
           }
           flip_data_local.accept_move(c) = 1;
-          auto rand_gen1 = pool.get_state();
+      //    auto rand_gen1 = pool.get_state();
           flip_data_local.spinValue(c) = propose_spin(pool);
-          pool.free_state(rand_gen1);
+       //   pool.free_state(rand_gen1);
           //delete end
           flip_data_local.save_end_conformation(c) = flip_data_local.end_conformation(c);
           flip_data_local.end_conformation(c) = flip_data_local.previous_monomers(c, flip_data_local.end_conformation(c));
@@ -451,6 +452,7 @@ struct MetropolisKernel {
 
     void parallel_tempering_swap()
     {
+      printf("Swap ! \n");
       static long long exch_id = 0;
     
       // 1) Copy J_chain to host and sort indices by J
@@ -548,7 +550,8 @@ struct MetropolisKernel {
       pool_initialized = true;
     }
 
-    team_policy policy(N_CHAINS, Kokkos::AUTO());
+    //team_policy policy(N_CHAINS, Kokkos::AUTO());
+    team_policy policy(N_CHAINS, 500, 1);
 
     auto d = devicedata;
     auto pool = my_pool;
