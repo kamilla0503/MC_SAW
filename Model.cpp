@@ -12,7 +12,8 @@ Model::Model(int L) : L(L) {
  //   #ifdef REGIME_2D
  //   lattice = new Lattice_2D(2 * L + OUT_Length);
 //#else
-    lattice = new Lattice_3D(0.75*L+OUT_Length);
+    lattice = new Lattice_3D(0.55*L+OUT_Length);
+    //lattice = new Lattice_3D(1.05*L+OUT_Length);
 //#endif
 
     L_host = Kokkos::View<int, Kokkos::HostSpace>("L");
@@ -21,8 +22,10 @@ Model::Model(int L) : L(L) {
 
 template<class T, int Dim>
 SAW_model<T, Dim>::SAW_model(int L,  float Jmin, float Jmax) : Model(L) {
+    HostDataInit();
     geometry_initialization_arrays();
-    geometry_initialization_stick();
+    //geometry_initialization_stick();
+    geometry_initialization_half();
     scalars_MC_preparation(Jmin, Jmax);
 
 }
@@ -90,6 +93,73 @@ void SAW_model<T, Dim>::geometry_initialization_arrays(){
 
 }
  
+template<class T, int Dim>
+void SAW_model<T, Dim>::geometry_initialization_half() {
+ 
+    auto nbr = [&](int node, int dir) -> int {
+        return hostdata.map_of_contacts_int(hostdata.ndim2() * node + dir);
+      };
+
+    const int Lm = this->L;   
+
+    for (int chain = 0; chain < N_CHAINS; ++chain) {
+
+        int middle = (Lm / 2) - 1;
+
+        // start at 0
+        hostdata.start_conformation(chain) = 0;
+        hostdata.start_index_in_nodes_position(chain) = 0;
+        hostdata.lattice_nodes_positions(chain, 0) = 0;
+        hostdata.previous_monomers(chain, 0) = NO_SAW_NODE;
+        hostdata.directions(chain, 0) = 0;
+        for (int i = 1; i < middle; ++i) {
+            hostdata.previous_monomers(chain, i) = nbr(i, 1);
+            hostdata.next_monomers(chain, i) = nbr(i, 0);
+            hostdata.directions(chain, i) = 0;
+            hostdata.lattice_nodes_positions(chain, i) = i;
+        }
+
+        int i_pos = middle;
+        hostdata.previous_monomers(chain, middle) = nbr(middle, 1);
+        hostdata.next_monomers(chain, middle) = nbr(middle, 2);
+        hostdata.directions(chain, middle) = 2;   // Go Up
+        hostdata.lattice_nodes_positions(chain, i_pos) = middle;
+        i_pos += 1;
+
+        middle = hostdata.next_monomers(chain, middle);
+
+        hostdata.previous_monomers(chain, middle) = nbr(middle, 3);
+        hostdata.next_monomers(chain, middle) = nbr(middle, 1);
+        hostdata.directions(chain, middle) = 1;
+        hostdata.lattice_nodes_positions(chain, i_pos) = middle;
+        i_pos += 1;
+        middle = hostdata.next_monomers(chain, middle);
+        hostdata.lattice_nodes_positions(chain, i_pos) = middle;
+        for (int pos = (Lm / 2) + 2; pos < Lm; ++pos) {
+            hostdata.previous_monomers(chain, middle) = nbr(middle, 0);
+            hostdata.next_monomers(chain, middle) = nbr(middle, 1);
+            hostdata.directions(chain, middle) = 1;
+      
+            middle = hostdata.next_monomers(chain, middle);
+            hostdata.lattice_nodes_positions(chain, pos) = middle;
+          }
+
+          hostdata.end_conformation(chain) = middle;
+     
+        hostdata.next_monomers(chain, 0) = nbr(0, 0);
+        hostdata.previous_monomers(chain, hostdata.end_conformation(chain)) = nbr(hostdata.end_conformation(chain), 0);
+
+        // terminate list at end (good hygiene for SAW linked list)
+        hostdata.next_monomers(chain, hostdata.end_conformation(chain)) = NO_SAW_NODE;
+        hostdata.directions(chain, hostdata.end_conformation(chain)) = NO_SAW_NODE;
+
+        // ensure last position is end
+        hostdata.lattice_nodes_positions(chain, Lm - 1) = hostdata.end_conformation(chain);
+    
+
+    }
+ 
+ }
  
 template<class T, int Dim>
 void SAW_model<T, Dim>::geometry_initialization_stick() {
@@ -133,7 +203,7 @@ void XY_LI<Dim>::spin_init_random() {
     for (int chain = 0; chain < N_CHAINS; chain++) { 
 
         for (int i = 0; i < this->L; i++) {
-            hostdata.sequence_on_lattice(chain, i) =  distribution_theta(generators_theta);
+            hostdata.sequence_on_lattice(chain, hostdata.lattice_nodes_positions(chain, i)) =  distribution_theta(generators_theta);
         }
 
     }

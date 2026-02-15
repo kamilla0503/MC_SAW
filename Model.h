@@ -11,9 +11,16 @@
 #include"common.h"
 #include"lattice.h"
 
-#ifndef N_CHAINS
-#define N_CHAINS 16
-#endif
+enum {
+  CHK_OK = 0,
+  CHK_OOB = 1,
+  CHK_DUP = 2,
+  CHK_ADJ_MAP = 3,
+  CHK_NEXT_PREV = 4,
+  CHK_DIR = 5,
+  CHK_ADJ_COORD = 6,
+  CHK_WRAP_STEP = 7
+};
 
 template<class ExecSpace, class T>
 struct DeviceData {
@@ -88,6 +95,13 @@ public:
 
 };
 
+
+static inline long long nsites_from_ls(int ls, int Dim) {
+  long long n = 1;
+  for (int k = 0; k < Dim; ++k) n *= (long long)ls;
+  return n;
+}
+
 template<class T, int Dim>
 class SAW_model : public Model {
 public:
@@ -101,6 +115,8 @@ public:
 
     void geometry_initialization_stick();
 
+    void geometry_initialization_half();
+
     void scalars_MC_preparation(float Jmin, float Jmax);
 
 
@@ -111,6 +127,10 @@ public:
     DeviceData<Kokkos::CudaSpace, T> devicedata;
     DeviceData<Kokkos::HostSpace, T> hostdata;
 
+    KOKKOS_INLINE_FUNCTION static float r2(int a, int b, int side) {
+      if constexpr (Dim == 2) return radius_sq_2d(a,b,side);
+      else                   return radius_sq_3d(a,b,side);
+    }
 
     template<class ExecSpace, class EnergyOp, class SpinProposalOp>
 struct MetropolisKernel {
@@ -129,7 +149,7 @@ struct MetropolisKernel {
 
     for (long long step = 1; step <= n_iters; ++step) {
       Kokkos::single(Kokkos::PerTeam(team), [&](){
-        d.flipMoveType(c) = rand_chain_step(12345, c, step * epoch1, 0);
+        d.flipMoveType(c) = rand_chain_step(12345, c, n_iters * epoch1 + step, 0);
       });
       team.team_barrier();
 
@@ -262,10 +282,11 @@ struct MetropolisKernel {
           pool.free_state(rand_gen);
           flip_data_local.direction(c) = dir;
   
+          int to_remove = flip_data_local.start_conformation(c);  // old start
           int new_point = flip_data_local.map_of_contacts_int(flip_data_local.ndim2() * flip_data_local.end_conformation(c) + dir);
   
           // Check self-avoid
-          if (flip_data_local.sequence_on_lattice(c, new_point) != NO_XY_SPIN) {
+          if (new_point != to_remove && flip_data_local.sequence_on_lattice(c, new_point) != NO_XY_SPIN) {
               //accept_move = false;
               flip_data_local.accept_move(c) = 0;
               return;  // skip the rest
@@ -315,10 +336,11 @@ struct MetropolisKernel {
           flip_data_local.direction(c)  = rand_gen.urand64() % 6;
           pool.free_state(rand_gen);
   
+          int to_remove = flip_data_local.end_conformation(c);    // old end
           int new_point = flip_data_local.map_of_contacts_int(flip_data_local.ndim2() * flip_data_local.start_conformation(c) + flip_data_local.direction(c) );
           flip_data_local.oldspin(c) = flip_data_local.sequence_on_lattice(c, flip_data_local.end_conformation(c));
   
-          if (flip_data_local.sequence_on_lattice(c, new_point) != NO_XY_SPIN)  {
+          if (new_point != to_remove && flip_data_local.sequence_on_lattice(c, new_point) != NO_XY_SPIN)  {
               flip_data_local.accept_move(c) = 0; // Set the flag to indicate rejection
               return;
           }
@@ -366,22 +388,36 @@ struct MetropolisKernel {
         float p_metropolis = (p1 < 1.0) ? p1 : 1.0;
 
         if (q_ifaccept < p_metropolis) {
+            const bool recycled = (flip_data_local.newIndex(c) == flip_data_local.oldIndex(c));
 
-            flip_data_local.sequence_on_lattice(c, flip_data_local.save_start_conformation(c)) = NO_XY_SPIN;
-            flip_data_local.directions(c, flip_data_local.save_start_conformation(c)) = NO_SAW_NODE;
+            if (!recycled) {
+              flip_data_local.sequence_on_lattice(c, flip_data_local.save_start_conformation(c)) = NO_XY_SPIN;
+              flip_data_local.directions(c, flip_data_local.save_start_conformation(c)) = NO_SAW_NODE;
+            }
+            // still do:
+            
             flip_data_local.directions(c, flip_data_local.previous_monomers(c, flip_data_local.end_conformation(c))) = flip_data_local.direction(c);
             flip_data_local.start_index_in_nodes_position(c) = (flip_data_local.start_index_in_nodes_position(c) + 1) % flip_data_local.L();
 
             flip_data_local.E(c) += flip_data_local.d_E_1(c);
 
-            //if (c==2) printf("newE = %f; d_E = %f\n",  flip_data_local.E(c),  flip_data_local.d_E_1(c));
-        } else {
+          } 
+          else {
             // reject => revert
+            const bool recycled = (flip_data_local.newIndex(c) == flip_data_local.oldIndex(c));
+
+
             int del = flip_data_local.end_conformation(c);
             flip_data_local.end_conformation(c) = flip_data_local.previous_monomers(c, flip_data_local.end_conformation(c));
             flip_data_local.next_monomers(c, flip_data_local.end_conformation(c)) = NO_SAW_NODE;
+            flip_data_local.next_monomers(c, del)     = NO_SAW_NODE;
+            flip_data_local.directions(c, flip_data_local.end_conformation(c)) = NO_SAW_NODE;
             flip_data_local.previous_monomers(c, del) = NO_SAW_NODE;
             flip_data_local.sequence_on_lattice(c, del) = NO_XY_SPIN;
+            // only wipe direction on del if it's not the recycled start node
+            if (!recycled) {
+              flip_data_local.directions(c, del) = NO_SAW_NODE;
+            }
 
             //add the previous beginning
             flip_data_local.previous_monomers(c, flip_data_local.start_conformation(c)) = flip_data_local.save_start_conformation(c);
@@ -396,9 +432,6 @@ struct MetropolisKernel {
 
 
   }
-
-
-
   
     KOKKOS_INLINE_FUNCTION
     static void hierarchicalOneKernel_AddStart_FirstPart(
@@ -414,17 +447,21 @@ struct MetropolisKernel {
         float p1 = exp(-(flip_data_local.J_chain(c) * (  flip_data_local.d_E_1(c)   )));
         float p_metropolis = Kokkos::min(1.0f, p1);
         if (q_ifaccept < p_metropolis) {
-            flip_data_local.sequence_on_lattice(c, flip_data_local.save_end_conformation(c)) = NO_XY_SPIN;
-            flip_data_local.directions(c, flip_data_local.end_conformation(c)) = NO_SAW_NODE;
+
+            const bool recycled = (flip_data_local.newIndex(c) == flip_data_local.oldIndex(c));
+
+            if (!recycled) {
+              flip_data_local.sequence_on_lattice(c, flip_data_local.save_end_conformation(c)) = NO_XY_SPIN;
+              flip_data_local.directions(c, flip_data_local.save_end_conformation(c)) = NO_SAW_NODE; // optional hygiene
+            }
+            
             flip_data_local.directions(c, flip_data_local.start_conformation(c)) = flip_data_local.inverse_steps(flip_data_local.direction(c));
             // new start is the new added value
             int position_new = (flip_data_local.start_index_in_nodes_position(c) + flip_data_local.L () - 1) % flip_data_local.L() ;
             flip_data_local.start_index_in_nodes_position(c) = position_new;
 
             flip_data_local.E(c) += flip_data_local.d_E_1(c);
-
-           // if (c==2) printf("newE = %f; d_E = %f\n",  flip_data_local.E(c),  flip_data_local.d_E_1(c));
-
+ 
         }
         else {
             //reject the new state
@@ -433,7 +470,16 @@ struct MetropolisKernel {
             flip_data_local.start_conformation(c) = flip_data_local.next_monomers(c, flip_data_local.start_conformation(c));
             flip_data_local.previous_monomers(c, flip_data_local.start_conformation(c)) = NO_SAW_NODE;
             flip_data_local.next_monomers(c, del) = NO_SAW_NODE;
+
             flip_data_local.sequence_on_lattice(c, del) = NO_XY_SPIN;
+            flip_data_local.directions(c, del) = NO_SAW_NODE;
+      
+          //  const bool recycled = (flip_data_local.newIndex(c) == flip_data_local.oldIndex(c));
+
+          //   if (!recycled) {
+          //     flip_data_local.sequence_on_lattice(c, flip_data_local.save_end_conformation(c)) = NO_XY_SPIN;
+          //     // directions cleanup is fine too, but keep it consistent with your representation
+          //   }
 
             //readd the end of the saw
             flip_data_local.next_monomers(c, flip_data_local.end_conformation(c)) = flip_data_local.save_end_conformation(c);
@@ -630,8 +676,258 @@ struct MetropolisKernel {
     if (!out) throw std::runtime_error("Cannot open dirs log file: " + filename);
     out_dir_data(out, n_steps);
   }
+
+
+
+  // Main entry: load state into hostdata from your two text files
+  long long restart_from_files(const std::string& angles_file,
+    const std::string& dirs_file,
+    long long target_step = -1)
+  {
+  const int ls = lattice->lattice_size();
+  const int nsites = pow_int(ls, Dim);
+
+  //allocate_state_views_host_if_needed(nsites);
+
+  // Clear fields
+  Kokkos::deep_copy(hostdata.sequence_on_lattice, (T)NO_XY_SPIN);
+  Kokkos::deep_copy(hostdata.next_monomers, NO_SAW_NODE);
+  Kokkos::deep_copy(hostdata.previous_monomers, NO_SAW_NODE);
+  Kokkos::deep_copy(hostdata.directions, NO_SAW_NODE);
+
+  // Read blocks
+  auto A = read_angles_block(angles_file, L, target_step);
+  auto D = read_dirs_block(dirs_file, L, ls, target_step);
+
+  // Basic sanity: steps should match (if not, pick dirs as truth)
+  const long long step_loaded = (D.step >= 0) ? D.step : A.step;
+
+  // Fill per chain
+  for (int c = 0; c < N_CHAINS; ++c) {
+  // J and E (prefer dirs for E/J consistency with geometry; you can flip preference)
+  hostdata.J_chain(c) = D.J[c];
+  hostdata.E(c)       = D.E[c];
+  hostdata.newE(c)    = 0.0f;
+
+  // Restore ring buffer
+  hostdata.start_index_in_nodes_position(c) = D.start_idx[c];
+  for (int e = 0; e < L; ++e) {
+  hostdata.lattice_nodes_positions(c, e) = D.pos[c][e];
+  }
+
+  // Fill spins at the stored positions (same indexing convention you wrote out)
+  for (int e = 0; e < L; ++e) {
+  const int pos = D.pos[c][e];
+  hostdata.sequence_on_lattice(c, pos) = (T)A.spin[c][e];
+  }
+
+  // Reconstruct start/end from ring buffer + start_index
+  const int sidx = hostdata.start_index_in_nodes_position(c);
+  const int start_pos = D.pos[c][sidx];
+  const int end_pos   = D.pos[c][(sidx + L - 1) % L];
+  hostdata.start_conformation(c) = start_pos;
+  hostdata.end_conformation(c)   = end_pos;
+
+  // Reconstruct chain order from start -> end
+  std::vector<int> chain_pos(L);
+  for (int t = 0; t < L; ++t) {
+  chain_pos[t] = D.pos[c][(sidx + t) % L];
+  }
+
+  // Link next/prev and directions along the chain
+  hostdata.previous_monomers(c, chain_pos[0]) = NO_SAW_NODE;
+  for (int t = 0; t < L - 1; ++t) {
+  const int p = chain_pos[t];
+  const int q = chain_pos[t + 1];
+
+  hostdata.next_monomers(c, p)     = q;
+  hostdata.previous_monomers(c, q) = p;
+
+  const int dir = find_dir_host(hostdata.map_of_contacts_int, hostdata.ndim2(), p, q);
+  hostdata.directions(c, p) = dir;
+  }
+  hostdata.next_monomers(c, chain_pos[L - 1]) = NO_SAW_NODE;
+  hostdata.directions(c, chain_pos[L - 1])    = NO_SAW_NODE;
+  }
+
+  return step_loaded;
+  }  
+  
+ 
+  struct ConfigCheckResult {
+    std::vector<int> code;      // size N_CHAINS
+    std::vector<int> at;        // index in chain where it failed (or -1)
+    std::vector<int> extra;     // e.g. duplicated index or neighbor mismatch info (or -1)
+  };
+  
  
  
+ 
+ 
+
+ConfigCheckResult check_config_device_extended(bool check_nextprev,
+                                               bool check_directions,
+                                               bool check_coord_adjacency,
+                                               bool detect_wrap_steps)
+{
+  using ExecSpace = Kokkos::Cuda;
+
+  const int ls = lattice->lattice_size();
+  const long long nsites = nsites_from_ls(ls, Dim);
+  const int Lloc = this->L;
+
+  Kokkos::View<int*, ExecSpace> d_code("chk_code", N_CHAINS);
+  Kokkos::View<int*, ExecSpace> d_at  ("chk_at",   N_CHAINS);
+  Kokkos::View<int*, ExecSpace> d_ex  ("chk_ex",   N_CHAINS);
+
+  auto d = devicedata;
+
+  Kokkos::parallel_for(
+    "check_config_extended",
+    Kokkos::RangePolicy<ExecSpace>(0, N_CHAINS),
+    KOKKOS_LAMBDA(const int c) {
+
+      int code = CHK_OK, at = -1, ex = -1;
+      const int ndim2 = d.ndim2();
+      const int s = d.start_index_in_nodes_position(c);
+
+      auto pos_at = [&](int t) -> int {
+        // t is chain-order index: 0..L-1 from start to end
+        return d.lattice_nodes_positions(c, (s + t) % Lloc);
+      };
+
+      auto decode = [&](int pos, int &x, int &y, int &z) {
+        x = pos % ls;
+        if constexpr (Dim == 2) {
+          y = pos / ls;
+          z = 0;
+        } else {
+          y = (pos / ls) % ls;
+          z = pos / (ls * ls);
+        }
+      };
+
+      // 1) OOB check
+      for (int t = 0; t < Lloc; ++t) {
+        const int p = pos_at(t);
+        if (p < 0 || (long long)p >= nsites) { code = CHK_OOB; at = t; ex = p; break; }
+      }
+
+      // 2) duplicate check (O(L^2), fine for L~100)
+      if (code == CHK_OK) {
+        for (int t = 0; t < Lloc; ++t) {
+          const int pt = pos_at(t);
+          for (int u = t + 1; u < Lloc; ++u) {
+            const int pu = pos_at(u);
+            if (pt == pu) { code = CHK_DUP; at = u; ex = t; break; }
+          }
+          if (code) break;
+        }
+      }
+
+      // 3) adjacency via neighbor map (cheap and matches your move logic)
+      if (code == CHK_OK) {
+        for (int t = 0; t < Lloc - 1; ++t) {
+          const int p = pos_at(t);
+          const int q = pos_at(t + 1);
+          bool ok = false;
+          const int base = ndim2 * p;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            if (d.map_of_contacts_int(base + dir) == q) { ok = true; break; }
+          }
+          if (!ok) { code = CHK_ADJ_MAP; at = t; ex = q; break; }
+        }
+      }
+
+      // 4) next/prev consistency (finds corruption fast)
+      if (check_nextprev && code == CHK_OK) {
+        for (int t = 0; t < Lloc - 1; ++t) {
+          const int p = pos_at(t);
+          const int q = pos_at(t + 1);
+          if (d.next_monomers(c, p) != q) { code = CHK_NEXT_PREV; at = t; ex = d.next_monomers(c, p); break; }
+          if (d.previous_monomers(c, q) != p) { code = CHK_NEXT_PREV; at = t+1; ex = d.previous_monomers(c, q); break; }
+        }
+      }
+
+      // 5) directions consistency (this is what you asked for)
+      if (check_directions && code == CHK_OK) {
+        // end must have NO_SAW_NODE direction
+        {
+          const int endp = pos_at(Lloc - 1);
+          if (d.directions(c, endp) != NO_SAW_NODE) {
+            code = CHK_DIR; at = Lloc - 1; ex = d.directions(c, endp);
+          }
+        }
+        // for each link p->q, directions(p) must point to q
+        if (code == CHK_OK) {
+          for (int t = 0; t < Lloc - 1; ++t) {
+            const int p = pos_at(t);
+            const int q = pos_at(t + 1);
+            const int dirp = d.directions(c, p);
+            if (dirp < 0 || dirp >= ndim2) { code = CHK_DIR; at = t; ex = dirp; break; }
+            const int neigh = d.map_of_contacts_int(ndim2 * p + dirp);
+            if (neigh != q) { code = CHK_DIR; at = t; ex = neigh; break; }
+          }
+        }
+      }
+
+      // 6) coordinate adjacency without wrap detection (catches fake-neighbor maps)
+      if (check_coord_adjacency && code == CHK_OK) {
+        const int side = d.lattice_side_device(); // read inside device
+        for (int t = 0; t < Lloc - 1; ++t) {
+          const int p = pos_at(t);
+          const int q = pos_at(t + 1);
+          const float rr = r2(p, q, side);
+          if (rr != 1.0f) { code = CHK_ADJ_COORD; at = t; ex = (int)rr; break; }
+        }
+
+
+ 
+      }
+
+      d_code(c) = code;
+      d_at(c)   = at;
+      d_ex(c)   = ex;
+    }
+  );
+  Kokkos::fence();
+
+  auto h_code = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d_code);
+  auto h_at   = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d_at);
+  auto h_ex   = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d_ex);
+
+  ConfigCheckResult r;
+  r.code.resize(N_CHAINS);
+  r.at.resize(N_CHAINS);
+  r.extra.resize(N_CHAINS);
+  for (int c = 0; c < N_CHAINS; ++c) {
+    r.code[c]  = h_code(c);
+    r.at[c]    = h_at(c);
+    r.extra[c] = h_ex(c);
+  }
+  return r;
+}
+
+// 
+
+bool check_before_output(bool check_nextprev) {
+  auto r = check_config_device_extended(      /*check_nextprev=*/true,
+    /*check_directions=*/true,
+    /*check_coord_adjacency=*/true,
+    /*detect_wrap_steps=*/true);
+  for (int c = 0; c < N_CHAINS; ++c) {
+    if (r.code[c] != 0) {
+      std::cerr << "[CONFIG BAD] chain " << c
+                << " code=" << r.code[c]
+                << " at=" << r.at[c]
+                << " extra=" << r.extra[c] << "\n";
+      return false;
+    }
+  }
+  return true;
+}
+
+
 };
 
 template<int Dim>
@@ -652,11 +948,6 @@ public:
       using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
     
       DeviceData<Kokkos::CudaSpace, float> d;
-
-      KOKKOS_INLINE_FUNCTION float r2(int a, int b, int side) const {
-        if constexpr (Dim == 2) return radius_sq_2d(a,b,side);
-        else                   return radius_sq_3d(a,b,side);
-      }
     
       KOKKOS_INLINE_FUNCTION
       void delta_energy(const member_type& team,
@@ -675,11 +966,11 @@ public:
                     if ((pos_i ==  flip_data.oldIndex(c)) || (pos_i == flip_data.newIndex(c)) ) return; 
     
                         float theta_i  = flip_data.sequence_on_lattice(c, pos_i);
-                        float r_val   = r2(pos_i, pos_j, flip_data.lattice_side_device());
+                        float r_val   = SAW_model<float, Dim>::r2(pos_i, pos_j, flip_data.lattice_side_device());
                         r_val = Kokkos::sqrt(r_val) * r_val; 
                         H_total += Kokkos::cos(theta_i - theta_j) / r_val;
     
-                        r_val   = r2(pos_i, pos_k , flip_data.lattice_side_device());
+                        r_val   = SAW_model<float, Dim>::r2(pos_i, pos_k , flip_data.lattice_side_device());
                         r_val = Kokkos::sqrt(r_val) * r_val;
                         H_total -= Kokkos::cos(theta_i - theta_k) / r_val;
     
@@ -701,7 +992,7 @@ public:
                         float theta_i  = flip_data.sequence_on_lattice(c, pos_i);
                           int pos_j  = flip_data.lattice_nodes_positions(c, j);
                         float theta_j = flip_data.sequence_on_lattice(c, pos_j);
-                        float r_val   = r2(pos_i, pos_j, flip_data.lattice_side_device());
+                        float r_val   = SAW_model<float, Dim>::r2(pos_i, pos_j, flip_data.lattice_side_device());
                         r_val = Kokkos::sqrt(r_val) * Kokkos::sqrt(r_val) * Kokkos::sqrt(r_val);
                         H_total -= Kokkos::cos(theta_i - theta_j) / r_val;
                 },
