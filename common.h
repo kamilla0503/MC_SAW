@@ -102,6 +102,14 @@ struct XYSpinProposal {
     return static_cast<float>(u) * two_pi;
   }
 };
+
+struct HomopolymerSpinProposal {
+  template<class Pool>
+  KOKKOS_INLINE_FUNCTION
+  int operator()(Pool& /*pool*/) const {
+    return 1;
+  }
+};
  
 template<class T>
 struct SpinProposalTraits;
@@ -110,6 +118,7 @@ template<>
 struct SpinProposalTraits<int> {
   using type = IsingSpinProposal;
 };
+
 
 
 
@@ -178,6 +187,7 @@ static inline RestartBlockAngles read_angles_block(const std::string& fname, int
 }
 
 // Dirs format: step J start_idx E then L*(x y z)
+/*
 static inline RestartBlockDirs read_dirs_block(const std::string& fname, int L, int ls, long long target_step = -1) {
   std::ifstream in(fname);
   if (!in) throw std::runtime_error("Cannot open dirs file: " + fname);
@@ -228,6 +238,81 @@ static inline RestartBlockDirs read_dirs_block(const std::string& fname, int L, 
   }
 
   if (best.step < 0) throw std::runtime_error("No complete dirs block found in " + fname);
+  return best;
+}
+*/
+
+template<int Dim>
+static inline RestartBlockDirs read_dirs_block(const std::string& fname,
+                                               int L,
+                                               int ls,
+                                               long long target_step = -1) {
+  std::ifstream in(fname);
+  if (!in) throw std::runtime_error("Cannot open dirs file: " + fname);
+
+  RestartBlockDirs best;
+  RestartBlockDirs cur;
+  cur.J.assign(N_CHAINS, 0.f);
+  cur.E.assign(N_CHAINS, 0.f);
+  cur.start_idx.assign(N_CHAINS, 0);
+  cur.pos.assign(N_CHAINS, std::vector<int>(L, 0));
+
+  long long step;
+  float J, E;
+  int start_idx;
+  int chain_in_block = 0;
+  long long cur_step = LLONG_MIN;
+
+  while (true) {
+    if (!(in >> step >> J >> start_idx >> E)) break;
+
+    std::vector<int> posbuf(L);
+    for (int i = 0; i < L; ++i) {
+      int idx = 0;
+
+      if constexpr (Dim == 2) {
+        int x, y;
+        if (!(in >> x >> y)) {
+          throw std::runtime_error("Malformed 2D dirs record in " + fname);
+        }
+        idx = x + ls * y;
+      } else if constexpr (Dim == 3) {
+        int x, y, z;
+        if (!(in >> x >> y >> z)) {
+          throw std::runtime_error("Malformed 3D dirs record in " + fname);
+        }
+        idx = x + ls * (y + ls * z);
+      } else {
+        static_assert(Dim == 2 || Dim == 3, "read_dirs_block only supports Dim=2 or Dim=3");
+      }
+
+      posbuf[i] = idx;
+    }
+
+    if (step != cur_step) {
+      cur_step = step;
+      chain_in_block = 0;
+    }
+
+    if (chain_in_block < N_CHAINS) {
+      cur.step = cur_step;
+      cur.J[chain_in_block] = J;
+      cur.E[chain_in_block] = E;
+      cur.start_idx[chain_in_block] = start_idx;
+      cur.pos[chain_in_block] = std::move(posbuf);
+      chain_in_block++;
+    }
+
+    if (chain_in_block == N_CHAINS) {
+      if (target_step < 0 || cur.step == target_step) {
+        best = cur;
+      }
+    }
+  }
+
+  if (best.step < 0) {
+    throw std::runtime_error("No complete dirs block found in " + fname);
+  }
   return best;
 }
 

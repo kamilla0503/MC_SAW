@@ -20,9 +20,18 @@ int main(int argc, char *argv[]) {
     float Jmax = std::stod(argv[3]);
     std::string angles_file, dirs_file; 
 
- 
 
-    XY_LI<3>* xy_li = new XY_LI<3>(L, Jmin, Jmax);
+    // XY_SI<2>* xy_li = new XY_SI<2>(L, Jmin, Jmax); 
+
+    //Homopolymer<3>* xy_li = new Homopolymer<3>(L, Jmin, Jmax); 
+
+    XY_LI_normalize<3>* xy_li = new XY_LI_normalize<3>(L, Jmin, Jmax); 
+
+ 
+   //Ising_SI<2>* xy_li = new Ising_SI<2>(L, Jmin, Jmax);
+   // XY_LI<3>* xy_li = new XY_LI<3>(L, Jmin, Jmax); // Used 
+
+
    // xy_li->HostDataInit();
     
     printf("HostInit finished\n");
@@ -52,10 +61,15 @@ int main(int argc, char *argv[]) {
       return -1;
     }
 
-    long long iters  = 10 * L;
+    // long long iters  = 10 * L;
+    long long iters  = 5 * L;
     long long n_steps_to_equlibrium = 700 * L * L;
 
-    long long iters_out = 2 * 10 * L * iters; 
+    // long long iters_out = 2 * 10 * L * iters; 
+   long long iters_out = 0.1 * L * iters; 
+
+   //long long iters_out = 100 * iters; 
+   
     printf("Start MC\n");
     for (long long i = 0; i < MC_STEPS + 20; i += iters) {
         xy_li->runMCMCOnDevice(iters, (i/iters)+1);
@@ -73,7 +87,7 @@ int main(int argc, char *argv[]) {
 
         //std::cout << i << " finished" << std::endl;
 
-
+        //if (i > (3200 * iters_out)) return 0;
       }
       
     // xy_li->runMCMCOnDevice(iters);

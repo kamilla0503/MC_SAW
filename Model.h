@@ -79,6 +79,10 @@ template<class ExecSpace, class T, class EnergyOp, int Dim>
 struct EnergyInitKernel;
 
 
+// template class Model<2>;
+// template class Model<3>;
+
+template<int Dim>
 class Model {
 public:
 
@@ -103,7 +107,7 @@ static inline long long nsites_from_ls(int ls, int Dim) {
 }
 
 template<class T, int Dim>
-class SAW_model : public Model {
+class SAW_model : public Model<Dim> {
 public:
     SAW_model<T, Dim>(int L,  float Jmin = 0.25, float Jmax = 0.26);
 
@@ -169,7 +173,7 @@ struct MetropolisKernel {
       team.team_barrier();
 
       if (geom_ok) {
-        const double u = rand_chain_step(12345, c, step * epoch1, 3);
+        const double u = rand_chain_step(12345, c, n_iters * epoch1 + step, 3);
 
         // Accept/reject & commit (common)
         if (d.flipMoveType(c) < 0.5f) {
@@ -210,12 +214,12 @@ struct MetropolisKernel {
     KOKKOS_INLINE_FUNCTION
     static void hierarchicalOneKernel_Reconnect (
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
-      const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
+      const DeviceData<Kokkos::CudaSpace, T>& flip_data_local,
       int chain, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool) {
         Kokkos::single(Kokkos::PerTeam(team_member), [&]() {
           auto rand_gen =  pool.get_state(); //flip_data_local.rand_pool.get_state();
-          flip_data_local.direction(chain)  = rand_gen.urand64() % 6;
+          flip_data_local.direction(chain)  = rand_gen.urand64() % flip_data_local.ndim2();
           pool.free_state(rand_gen);
   
           int  step_coord = flip_data_local.map_of_contacts_int(flip_data_local.ndim2() * flip_data_local.end_conformation(chain) + flip_data_local.direction(chain) );
@@ -270,7 +274,7 @@ struct MetropolisKernel {
     KOKKOS_INLINE_FUNCTION
     static void hierarchicalFlipMoveAddEnd(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
-      const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
+      const DeviceData<Kokkos::CudaSpace, T>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool,
       const SpinProposalOp& propose_spin)  {
@@ -278,7 +282,7 @@ struct MetropolisKernel {
           // Example random usage
   
           auto rand_gen =  pool.get_state();  
-          int dir = rand_gen.urand64() % 6;
+          int dir = rand_gen.urand64() % flip_data_local.ndim2();
           pool.free_state(rand_gen);
           flip_data_local.direction(c) = dir;
   
@@ -326,14 +330,14 @@ struct MetropolisKernel {
     KOKKOS_INLINE_FUNCTION
     static void hierarchicalFlipMoveAddStart(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
-      const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
+      const DeviceData<Kokkos::CudaSpace, T>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool,
       const SpinProposalOp& propose_spin) {
         Kokkos::single(Kokkos::PerTeam(team_member), [&]() {
           // Example random usage
           auto rand_gen =  pool.get_state();  
-          flip_data_local.direction(c)  = rand_gen.urand64() % 6;
+          flip_data_local.direction(c)  = rand_gen.urand64() % flip_data_local.ndim2();
           pool.free_state(rand_gen);
   
           int to_remove = flip_data_local.end_conformation(c);    // old end
@@ -376,7 +380,7 @@ struct MetropolisKernel {
     KOKKOS_INLINE_FUNCTION
     static void hierarchicalOneKernel_AddEnd_FirstPart(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
-      const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
+      const DeviceData<Kokkos::CudaSpace, T>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool, 
       float q_ifaccept)
@@ -436,7 +440,7 @@ struct MetropolisKernel {
     KOKKOS_INLINE_FUNCTION
     static void hierarchicalOneKernel_AddStart_FirstPart(
       const Kokkos::TeamPolicy<Kokkos::Cuda>::member_type& team_member,
-      const DeviceData<Kokkos::CudaSpace, float>& flip_data_local,
+      const DeviceData<Kokkos::CudaSpace, T>& flip_data_local,
       int c, 
       const Kokkos::Random_XorShift64_Pool<Kokkos::Cuda> & pool, 
       float q_ifaccept) 
@@ -580,9 +584,6 @@ struct MetropolisKernel {
     );
   }
 
-
-
-
   template<class EnergyOp, class SpinProposalOp>
   void runMCMCOnDevice_impl(EnergyOp energy, SpinProposalOp propose, long long MC_STEPS, long long epoch) {
     using ExecSpace   = Kokkos::Cuda;
@@ -626,7 +627,7 @@ struct MetropolisKernel {
     for (int c = 0; c < N_CHAINS; ++c) {
       out << n_steps << " " << hostdata.J_chain(c) << " " << hostdata.E(c) << " ";
 
-      for (int e = 0; e < L; ++e) {
+      for (int e = 0; e < this->L; ++e) {
         const int pos = hostdata.lattice_nodes_positions(c, e);
         out << hostdata.sequence_on_lattice(c, pos) << " ";
       }
@@ -638,14 +639,14 @@ struct MetropolisKernel {
   void out_dir_data(std::ostream &out, long long n_steps) {
     update_host_for_output();
 
-    const int ls = lattice->lattice_size();
+    const int ls = this->lattice->lattice_size();
 
     for (int c = 0; c < N_CHAINS; ++c) {
       out << n_steps << " " << hostdata.J_chain(c) << " "
           << hostdata.start_index_in_nodes_position(c) << " "
           << hostdata.E(c) << " ";
 
-      for (int i = 0; i < L; ++i) {
+      for (int i = 0; i < this->L; ++i) {
         const int pos = hostdata.lattice_nodes_positions(c, i);
 
         const int x = pos % ls;
@@ -684,7 +685,7 @@ struct MetropolisKernel {
     const std::string& dirs_file,
     long long target_step = -1)
   {
-  const int ls = lattice->lattice_size();
+  const int ls = this->lattice->lattice_size();
   const int nsites = pow_int(ls, Dim);
 
   //allocate_state_views_host_if_needed(nsites);
@@ -696,8 +697,8 @@ struct MetropolisKernel {
   Kokkos::deep_copy(hostdata.directions, NO_SAW_NODE);
 
   // Read blocks
-  auto A = read_angles_block(angles_file, L, target_step);
-  auto D = read_dirs_block(dirs_file, L, ls, target_step);
+  auto A = read_angles_block(angles_file, this->L, target_step);
+  auto D = read_dirs_block<Dim>(dirs_file, this->L, ls, target_step);
 
   // Basic sanity: steps should match (if not, pick dirs as truth)
   const long long step_loaded = (D.step >= 0) ? D.step : A.step;
@@ -711,12 +712,12 @@ struct MetropolisKernel {
 
   // Restore ring buffer
   hostdata.start_index_in_nodes_position(c) = D.start_idx[c];
-  for (int e = 0; e < L; ++e) {
+  for (int e = 0; e < this->L; ++e) {
   hostdata.lattice_nodes_positions(c, e) = D.pos[c][e];
   }
 
   // Fill spins at the stored positions (same indexing convention you wrote out)
-  for (int e = 0; e < L; ++e) {
+  for (int e = 0; e < this->L; ++e) {
   const int pos = D.pos[c][e];
   hostdata.sequence_on_lattice(c, pos) = (T)A.spin[c][e];
   }
@@ -724,19 +725,19 @@ struct MetropolisKernel {
   // Reconstruct start/end from ring buffer + start_index
   const int sidx = hostdata.start_index_in_nodes_position(c);
   const int start_pos = D.pos[c][sidx];
-  const int end_pos   = D.pos[c][(sidx + L - 1) % L];
+  const int end_pos   = D.pos[c][(sidx + this->L - 1) % this->L];
   hostdata.start_conformation(c) = start_pos;
   hostdata.end_conformation(c)   = end_pos;
 
   // Reconstruct chain order from start -> end
-  std::vector<int> chain_pos(L);
-  for (int t = 0; t < L; ++t) {
-  chain_pos[t] = D.pos[c][(sidx + t) % L];
+  std::vector<int> chain_pos(this->L);
+  for (int t = 0; t < this->L; ++t) {
+  chain_pos[t] = D.pos[c][(sidx + t) % this->L];
   }
 
   // Link next/prev and directions along the chain
   hostdata.previous_monomers(c, chain_pos[0]) = NO_SAW_NODE;
-  for (int t = 0; t < L - 1; ++t) {
+  for (int t = 0; t < this->L - 1; ++t) {
   const int p = chain_pos[t];
   const int q = chain_pos[t + 1];
 
@@ -746,8 +747,8 @@ struct MetropolisKernel {
   const int dir = find_dir_host(hostdata.map_of_contacts_int, hostdata.ndim2(), p, q);
   hostdata.directions(c, p) = dir;
   }
-  hostdata.next_monomers(c, chain_pos[L - 1]) = NO_SAW_NODE;
-  hostdata.directions(c, chain_pos[L - 1])    = NO_SAW_NODE;
+  hostdata.next_monomers(c, chain_pos[this->L - 1]) = NO_SAW_NODE;
+  hostdata.directions(c, chain_pos[this->L - 1])    = NO_SAW_NODE;
   }
 
   return step_loaded;
@@ -760,10 +761,6 @@ struct MetropolisKernel {
     std::vector<int> extra;     // e.g. duplicated index or neighbor mismatch info (or -1)
   };
   
- 
- 
- 
- 
 
 ConfigCheckResult check_config_device_extended(bool check_nextprev,
                                                bool check_directions,
@@ -772,7 +769,7 @@ ConfigCheckResult check_config_device_extended(bool check_nextprev,
 {
   using ExecSpace = Kokkos::Cuda;
 
-  const int ls = lattice->lattice_size();
+  const int ls = this->lattice->lattice_size();
   const long long nsites = nsites_from_ls(ls, Dim);
   const int Lloc = this->L;
 
@@ -1015,12 +1012,259 @@ template<int Dim>
 class XY_SI : public SAW_model<float, Dim> {
 public:
 
+  using Base = SAW_model<float, Dim>;
+  using Base::hostdata;
+  using Base::devicedata;
+  using Base::lattice;
+
+  XY_SI (int L,float Jmin = 0.25, float Jmax = 0.26);
+
+  void spin_init_random();
+  void start_kernel_energy_init() override;
+
+  struct XY_SI_EnergyOp {
+    using ExecSpace = Kokkos::Cuda;
+    using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
+  
+    DeviceData<Kokkos::CudaSpace, float> d;
+
+
+    KOKKOS_INLINE_FUNCTION
+    void delta_energy(const member_type& team,
+                      const DeviceData<Kokkos::CudaSpace, float>& flip,
+                      int c) const
+    {
+      Kokkos::single(Kokkos::PerTeam(team), [&]() {
+        const int ndim2 = flip.ndim2();
+        const int p_old = flip.oldIndex(c);                     
+        const int p_new = flip.newIndex(c);                     
+        const float s_old = flip.oldspin(c);                      
+        const float s_new = flip.spinValue(c); //flip.sequence_on_lattice(c, p_new);  
+      //  printf("%d \n", s_new);
+        const bool recycled = (p_old == p_new);
+
+        float E_old_local = 0.0f;   // edges touching p_old in OLD state
+        float E_new_local = 0.0f;   // edges touching p_new in NEW state
+        {
+          const int base = ndim2 * p_old;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb = flip.map_of_contacts_int(base + dir);
+  
+            // If not recycled, p_new is occupied NOW but was empty BEFORE -> skip it for OLD.
+            if (!recycled && nb == p_new) continue;
+  
+            const float s_nb = flip.sequence_on_lattice(c, nb);
+            if (s_nb == NO_XY_SPIN) continue;   // neighbor empty
+            E_old_local += - Kokkos::cos(s_old - s_nb);
+          }
+        }
+
+        {
+          const int base = ndim2 * p_new;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb = flip.map_of_contacts_int(base + dir);
+  
+            // Symmetric safety: p_old is empty NOW but was occupied BEFORE -> skip for NEW if needed.
+            // (Normally sequence_on_lattice(p_old) is already NO_XY_SPIN, so this is just hygiene.)
+            if (!recycled && nb == p_old) continue;
+  
+            const float s_nb = flip.sequence_on_lattice(c, nb);
+            if (s_nb == NO_XY_SPIN) continue;
+            E_new_local += - Kokkos::cos(s_new - s_nb);
+          }
+        }        
+ 
+ 
+          flip.d_E_1(c) = E_new_local - E_old_local;
+      });
+
+
+
+    }
+
+
+    KOKKOS_INLINE_FUNCTION
+    void energy(const member_type& team,
+                       const DeviceData<Kokkos::CudaSpace, float>& flip,
+                       int c) const
+   {
+    const int ndim2 = flip.ndim2();
+    float H = 0.0f;
+        Kokkos::parallel_reduce(
+          Kokkos::TeamThreadRange(team, flip.L()),
+          [&](const int t, float& sum) {
+            const int p   = flip.lattice_nodes_positions(c, t);
+            const float s_p = flip.sequence_on_lattice(c, p);
+            // (Should never be empty for positions list, but fine)
+            if (s_p == NO_XY_SPIN) return;
+            const int base = ndim2 * p;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb   = flip.map_of_contacts_int(base + dir);
+            const float s_nb = flip.sequence_on_lattice(c, nb);
+            if (s_nb == NO_XY_SPIN) continue;
+
+            // Count each undirected edge twice (p->nb and nb->p), so multiply by 1/2.
+            sum += -0.5f * Kokkos::cos(s_nb  - s_p);
+          }
+
+        }, H);
+
+      Kokkos::single(Kokkos::PerTeam(team), [&]() { flip.newE(c) = H; });
+    
+    }
+
+  };
+
+
+  void runMCMCOnDevice(long long MC_STEPS = 10000, long long epoch = 1000) {
+    XY_SI_EnergyOp op{ this->devicedata };
+    XYSpinProposal  propose{}; 
+    this->runMCMCOnDevice_impl(op, propose, MC_STEPS, epoch);
+    //this->parallel_tempering_swap();
+  } 
+
 };
 
 template<int Dim>
 class Ising_SI : public SAW_model<int, Dim> {
 public:
+  using Base = SAW_model<int, Dim>;
+  using Base::hostdata;
+  using Base::devicedata;
+  using Base::lattice;
 
+  Ising_SI (int L,float Jmin = 0.25, float Jmax = 0.26);
+
+  void spin_init_random();
+  void start_kernel_energy_init() override;
+
+  struct Ising_SI_EnergyOp {
+    using ExecSpace   = Kokkos::Cuda;
+    using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
+    DeviceData<Kokkos::CudaSpace, int> d;
+
+
+    KOKKOS_INLINE_FUNCTION
+    void delta_energy(const member_type& team,
+                      const DeviceData<Kokkos::CudaSpace, int>& flip,
+                      int c) const
+    {
+
+      Kokkos::single(Kokkos::PerTeam(team), [&]() {
+        const int ndim2 = flip.ndim2();
+        const int p_old = flip.oldIndex(c);                     
+        const int p_new = flip.newIndex(c);                     
+        const int s_old = flip.oldspin(c);                      
+        const int s_new = flip.spinValue(c); //flip.sequence_on_lattice(c, p_new);  
+      //  printf("%d \n", s_new);
+        const bool recycled = (p_old == p_new);
+
+        float E_old_local = 0.0f;   // edges touching p_old in OLD state
+        float E_new_local = 0.0f;   // edges touching p_new in NEW state
+        {
+          const int base = ndim2 * p_old;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb = flip.map_of_contacts_int(base + dir);
+  
+            // If not recycled, p_new is occupied NOW but was empty BEFORE -> skip it for OLD.
+            if (!recycled && nb == p_new) continue;
+  
+            const int s_nb = flip.sequence_on_lattice(c, nb);
+            if (s_nb == NO_XY_SPIN) continue;   // neighbor empty
+            E_old_local += -float(s_old * s_nb);
+          }
+        }
+
+        {
+          const int base = ndim2 * p_new;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb = flip.map_of_contacts_int(base + dir);
+  
+            // Symmetric safety: p_old is empty NOW but was occupied BEFORE -> skip for NEW if needed.
+            // (Normally sequence_on_lattice(p_old) is already NO_XY_SPIN, so this is just hygiene.)
+            if (!recycled && nb == p_old) continue;
+  
+            const int s_nb = flip.sequence_on_lattice(c, nb);
+            if (s_nb == NO_XY_SPIN) continue;
+            E_new_local += -float(s_new * s_nb);
+          }
+        }        
+
+          // //смотрим потери
+          // for (int j = 0; j < lattice.ndim2(); j++) {
+          // step = lattice.map_of_contacts_int[lattice.ndim2() * temp + j];
+          // if (sequence_on_lattice[step] != 0) {
+          //     hh = hh - sequence_on_lattice[temp] * sequence_on_lattice[step];
+          // }
+          // }
+
+          // //смотрим выигрыш
+          // for (int j = 0; j < lattice.ndim2(); j++) {
+          // step = lattice.map_of_contacts_int[lattice.ndim2() * end_conformation + j];
+          // if (sequence_on_lattice[step] != 0) {
+          //     hh = hh + sequence_on_lattice[end_conformation] * sequence_on_lattice[step];
+          // }
+          // } 
+
+          flip.d_E_1(c) = E_new_local - E_old_local;
+
+
+
+          // Inside delta_energy, add:
+//printf("chain %d: p_old=%d p_new=%d s_old=%d s_new=%d E_old=%.3f E_new=%.3f dE=%.3f\n",
+//  c, p_old, p_new, s_old, s_new, E_old_local, E_new_local, E_new_local - E_old_local);
+
+      });
+
+    }
+
+
+
+    KOKKOS_INLINE_FUNCTION
+    void energy(const member_type& team,
+                const DeviceData<Kokkos::CudaSpace, int>& flip,
+                int c) const
+    {
+      const int ndim2 = flip.ndim2();
+      float H = 0.0f;
+
+      Kokkos::parallel_reduce(
+        Kokkos::TeamThreadRange(team, flip.L()),
+        [&](const int t, float& sum) {
+          const int p   = flip.lattice_nodes_positions(c, t);
+          const int s_p = flip.sequence_on_lattice(c, p);
+          // (Should never be empty for positions list, but fine)
+          if (s_p == NO_XY_SPIN) return;
+          const int base = ndim2 * p;
+        for (int dir = 0; dir < ndim2; ++dir) {
+          const int nb   = flip.map_of_contacts_int(base + dir);
+          const int s_nb = flip.sequence_on_lattice(c, nb);
+          if (s_nb == NO_XY_SPIN) continue;
+
+          // Count each undirected edge twice (p->nb and nb->p), so multiply by 1/2.
+          sum += -0.5f * float(s_p * s_nb);
+        }
+
+      }, H);
+
+      Kokkos::single(Kokkos::PerTeam(team), [&]() { flip.newE(c) = H; });
+      
+    }
+
+  };
+
+
+  void runMCMCOnDevice(long long MC_STEPS = 10000, long long epoch = 1000) {
+    Ising_SI_EnergyOp op {this->devicedata};
+    IsingSpinProposal  propose{}; 
+    this->runMCMCOnDevice_impl(op, propose, MC_STEPS, epoch);
+    //this->runMCMCOnDevice_impl(op, propose, MC_STEPS, epoch);
+    //this->parallel_tempering_swap();
+
+    // XY_LI_EnergyOp op{ this->devicedata };
+    // XYSpinProposal  propose{}; 
+    // this->runMCMCOnDevice_impl(op, propose, MC_STEPS, epoch);
+  } 
 };
 
 template<int Dim>
@@ -1083,14 +1327,14 @@ void download_all(const DeviceData<ExecSpace, T>& d, DeviceData<Kokkos::HostSpac
 
 template<class T, int Dim>
 void SAW_model<T,Dim>::HostDataInit() {
-    hostdata.map_of_contacts_int = lattice->map_of_contacts_int;
-    hostdata.inverse_steps       = lattice->inverse_steps;
+    hostdata.map_of_contacts_int = this->lattice->map_of_contacts_int;
+    hostdata.inverse_steps       = this->lattice->inverse_steps;
 
-    hostdata.L = L_host;
-    hostdata.lattice_side_device = lattice->lattice_side_host;
+    hostdata.L = this->L_host;
+    hostdata.lattice_side_device = this->lattice->lattice_side_host;
 
     hostdata.ndim2 = Kokkos::View<int, Kokkos::HostSpace>("ndim2");
-    hostdata.ndim2() = lattice->ndim2();
+    hostdata.ndim2() = this->lattice->ndim2();
 
 }
 
@@ -1127,6 +1371,7 @@ struct EnergyInitKernel {
     const int c = team.league_rank();
     d.newE(c) = 0.0f;
     energy.energy(team, d, c);
+    team.team_barrier();
     d.E(c) = d.newE(c);
   }
 };
@@ -1136,5 +1381,265 @@ struct SpinProposalTraits<float> {
   using type = XYSpinProposal;
 };
 
+
+
+
+template<int Dim>
+class Homopolymer : public SAW_model<int, Dim> {
+public:
+  using Base = SAW_model<int, Dim>;
+  using Base::hostdata;
+  using Base::devicedata;
+  using Base::lattice;
+
+  Homopolymer(int L, float Jmin = 0.25f, float Jmax = 0.26f);
+
+  void spin_init_random() override;
+  void start_kernel_energy_init() override;
+
+  struct Homopolymer_EnergyOp {
+    using ExecSpace   = Kokkos::Cuda;
+    using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
+
+    DeviceData<Kokkos::CudaSpace, int> d;
+
+    KOKKOS_INLINE_FUNCTION
+    void delta_energy(const member_type& team,
+                      const DeviceData<Kokkos::CudaSpace, int>& flip,
+                      int c) const
+    {
+      Kokkos::single(Kokkos::PerTeam(team), [&]() {
+        const int ndim2 = flip.ndim2();
+
+        const int p_old = flip.oldIndex(c);   // removed endpoint
+        const int p_new = flip.newIndex(c);   // added endpoint
+        const bool recycled = (p_old == p_new);
+
+        // Which move was proposed?
+        const bool add_end = (flip.flipMoveType(c) < 0.5f);
+
+        // Old bonded neighbor of removed endpoint in the OLD state:
+        // after proposal, the chain has already been updated, so:
+        //   add_end   -> removed monomer was old start, bonded to current start
+        //   add_start -> removed monomer was old end,   bonded to current end
+        const int old_bonded =
+            add_end ? flip.start_conformation(c)
+                    : flip.end_conformation(c);
+
+        // New bonded neighbor of added endpoint in the NEW state:
+        //   add_end   -> new endpoint is bonded to its previous monomer
+        //   add_start -> new endpoint is bonded to its next monomer
+        const int new_bonded =
+            add_end ? flip.previous_monomers(c, p_new)
+                    : flip.next_monomers(c, p_new);
+
+        float E_old_local = 0.0f;
+        float E_new_local = 0.0f;
+
+        // Contacts lost by removing p_old
+        {
+          const int base = ndim2 * p_old;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb = flip.map_of_contacts_int(base + dir);
+
+            // Exclude the covalent bond in the OLD configuration
+            if (nb == old_bonded) continue;
+
+            // If not recycled, p_new is occupied now but was empty before
+            if (!recycled && nb == p_new) continue;
+
+            if (flip.sequence_on_lattice(c, nb) == NO_XY_SPIN) continue;
+
+            E_old_local += -1.0f;
+          }
+        }
+
+        // Contacts gained by adding p_new
+        {
+          const int base = ndim2 * p_new;
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb = flip.map_of_contacts_int(base + dir);
+
+            // Exclude the covalent bond in the NEW configuration
+            if (nb == new_bonded) continue;
+
+            if (flip.sequence_on_lattice(c, nb) == NO_XY_SPIN) continue;
+
+            E_new_local += -1.0f;
+          }
+        }
+
+        flip.d_E_1(c) = E_new_local - E_old_local;
+      });
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    void energy(const member_type& team,
+                const DeviceData<Kokkos::CudaSpace, int>& flip,
+                int c) const
+    {
+      const int ndim2 = flip.ndim2();
+      float H = 0.0f;
+
+      Kokkos::parallel_reduce(
+        Kokkos::TeamThreadRange(team, flip.L()),
+        [&](const int t, float& sum) {
+          const int p = flip.lattice_nodes_positions(c, t);
+          if (flip.sequence_on_lattice(c, p) == NO_XY_SPIN) return;
+
+          const int p_next = flip.next_monomers(c, p);
+          const int p_prev = flip.previous_monomers(c, p);
+          const int base   = ndim2 * p;
+
+          for (int dir = 0; dir < ndim2; ++dir) {
+            const int nb = flip.map_of_contacts_int(base + dir);
+
+            if (flip.sequence_on_lattice(c, nb) == NO_XY_SPIN) continue;
+
+            // Exclude covalent neighbors along the polymer backbone
+            if (nb == p_next || nb == p_prev) continue;
+
+            // Each undirected contact is seen twice, so divide by 2
+            sum += -0.5f;
+          }
+        },
+        H
+      );
+
+      Kokkos::single(Kokkos::PerTeam(team), [&]() {
+        flip.newE(c) = H;
+      });
+    }
+  };
+
+  void runMCMCOnDevice(long long MC_STEPS = 10000, long long epoch = 1000) {
+    Homopolymer_EnergyOp op{ this->devicedata };
+    HomopolymerSpinProposal propose{};
+    this->runMCMCOnDevice_impl(op, propose, MC_STEPS, epoch);
+  }
+};
+
+
+
+
+
+template<int Dim>
+class XY_LI_normalize : public SAW_model<float, Dim> {
+public:
+    using Base = SAW_model<float, Dim>;
+    using Base::hostdata;
+    using Base::devicedata;
+    using Base::lattice;
+
+    XY_LI_normalize(int L, float Jmin = 0.25f, float Jmax = 0.26f, float power = 3.0f);
+
+    void spin_init_random();
+    void start_kernel_energy_init() override;
+
+    // Exponent in the long-range coupling 1/r^power_ij and in the
+    // normalization sum S = sum_{i<j} 1/r_ij^power_ij.
+    float power_ij;
+
+    struct XY_LI_normalize_EnergyOp {
+        using ExecSpace   = Kokkos::Cuda;
+        using member_type = typename Kokkos::TeamPolicy<ExecSpace>::member_type;
+
+        DeviceData<Kokkos::CudaSpace, float> d;
+        float power;
+
+        // ------- delta_energy: full recompute of H_norm in the new geometry -------
+        // Returns d_E_1(c) = H_norm_new - H_norm_old, where
+        //   H_norm = ( -sum_{i<j} cos(theta_i-theta_j) / r_ij^power ) / ( sum_{i<j} 1/r_ij^power ).
+        // This is O(L^2) per move but parallelized across the team.
+        KOKKOS_INLINE_FUNCTION
+        void delta_energy(const member_type& team,
+                          const DeviceData<Kokkos::CudaSpace, float>& flip,
+                          int c) const
+        {
+            double E_new = 0.0;   // -sum cos/r^p over all pairs in NEW geometry
+            double S_new = 0.0;   //  sum  1 /r^p over all pairs in NEW geometry
+
+            Kokkos::parallel_reduce(
+                Kokkos::TeamThreadRange(team, flip.N_pairs()),
+                [&](const int ind, double& E_acc, double& S_acc) {
+                    const int i      = flip.i_index(ind);
+                    const int j      = flip.j_index(ind);
+                    const int pos_i  = flip.lattice_nodes_positions(c, i);
+                    const int pos_j  = flip.lattice_nodes_positions(c, j);
+                    const float ti   = flip.sequence_on_lattice(c, pos_i);
+                    const float tj   = flip.sequence_on_lattice(c, pos_j);
+
+                    const float r2_v = SAW_model<float, Dim>::r2(
+                        pos_i, pos_j, flip.lattice_side_device());
+                    const float r    = Kokkos::sqrt(r2_v);
+                    // Fast path for the canonical case power == 3 (matches XY_LI's idiom)
+                    const float inv_rp = (power == 3.0f)
+                        ? (1.0f / (r * r2_v))
+                        : (1.0f / Kokkos::pow(r, power));
+
+                    E_acc += -static_cast<double>(Kokkos::cos(ti - tj)) * inv_rp;
+                    S_acc +=  static_cast<double>(inv_rp);
+                },
+                E_new, S_new
+            );
+
+            Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                const float scale = static_cast<float>(flip.L()); 
+                const float H_norm_new = scale * static_cast<float>(E_new / S_new);
+                const float H_norm_old = flip.E(c);   // E stores the cumulative H_norm
+                flip.d_E_1(c) = H_norm_new - H_norm_old;
+                // Note: the Metropolis kernel will do E(c) += d_E_1(c) on accept,
+                // so on accept E(c) becomes H_norm_new automatically.
+            });
+        }
+
+        // ------- energy: full H_norm of the current configuration -------
+        // Used by EnergyInitKernel; writes the result into newE(c), then the
+        // base class copies newE -> E at init time.
+        KOKKOS_INLINE_FUNCTION
+        void energy(const member_type& team,
+                    const DeviceData<Kokkos::CudaSpace, float>& flip,
+                    int c) const
+        {
+            double E_total = 0.0;
+            double S_total = 0.0;
+
+            Kokkos::parallel_reduce(
+                Kokkos::TeamThreadRange(team, flip.N_pairs()),
+                [&](const int ind, double& E_acc, double& S_acc) {
+                    const int i      = flip.i_index(ind);
+                    const int j      = flip.j_index(ind);
+                    const int pos_i  = flip.lattice_nodes_positions(c, i);
+                    const int pos_j  = flip.lattice_nodes_positions(c, j);
+                    const float ti   = flip.sequence_on_lattice(c, pos_i);
+                    const float tj   = flip.sequence_on_lattice(c, pos_j);
+
+                    const float r2_v = SAW_model<float, Dim>::r2(
+                        pos_i, pos_j, flip.lattice_side_device());
+                    const float r    = Kokkos::sqrt(r2_v);
+                    const float inv_rp = (power == 3.0f)
+                        ? (1.0f / (r * r2_v))
+                        : (1.0f / Kokkos::pow(r, power));
+
+                    E_acc += -static_cast<double>(Kokkos::cos(ti - tj)) * inv_rp;
+                    S_acc +=  static_cast<double>(inv_rp);
+                },
+                E_total, S_total
+            );
+
+            Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                const float scale = static_cast<float>(flip.L()); 
+                flip.newE(c) = static_cast<float>(E_total / (S_total) * scale);
+            });
+        }
+    };
+
+    void runMCMCOnDevice(long long MC_STEPS = 10000, long long epoch = 1000) {
+        XY_LI_normalize_EnergyOp op{ this->devicedata, this->power_ij };
+        XYSpinProposal           propose{};
+        this->runMCMCOnDevice_impl(op, propose, MC_STEPS, epoch);
+        // this->parallel_tempering_swap();
+    }
+};
 
 #endif
