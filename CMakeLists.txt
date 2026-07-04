@@ -1,5 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
-project(MySimulation LANGUAGES CXX CUDA)
+
 
 # ------------------------------------------------------------------------------
 # 1) Basic C++/CUDA Settings
@@ -8,10 +7,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # If you want to control CUDA standard as well
-set(CMAKE_CUDA_STANDARD 14)
+set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_COMPILER "/home/knfayzullina/kokkos/bin/nvcc_wrapper")
+
+cmake_minimum_required(VERSION 3.10)
+project(MySimulation LANGUAGES CXX CUDA)
+
+
 # ------------------------------------------------------------------------------
 # 2) Kokkos Configuration Options
 #    (You can turn these ON/OFF as needed, or set them via command line)
@@ -68,11 +72,15 @@ target_include_directories(mc_modeling PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+set(Q_CLOCK 3 CACHE STRING "Number of clock states")
+target_compile_definitions(mc_modeling PRIVATE Q_CLOCK=${Q_CLOCK})
+
 # ------------------------------------------------------------------------------
 # 8) Optional: Additional Compile Flags (Equivalent to your CXXFLAGS)
 # ------------------------------------------------------------------------------
 set_property(TARGET mc_modeling PROPERTY CXX_STANDARD 14)
 set_property(TARGET mc_modeling PROPERTY CUDA_STANDARD 14)
+
 
 # Example: replicating your -O3 -DREGIME_3D -DSTARTHALF -use_fast_math
 target_compile_options(mc_modeling PRIVATE
